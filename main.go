@@ -1,0 +1,96 @@
+package main
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/andrewheberle/go-kdcproxy/kdcproxy"
+	"github.com/cloudflare/certinel/fswatcher"
+	"github.com/oklog/run"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+func main() {
+	// command line flags
+	pflag.Bool("debug", false, "Enable debug logging")
+	pflag.String("listen", ":8080", "Listen address")
+	pflag.String("realm", "", "Kerberos realm")
+	pflag.String("cert", "", "TLS certificate")
+	pflag.String("key", "", "TLS key")
+	pflag.Parse()
+
+	// viper setup
+	viper.SetEnvPrefix("kdc_proxy")
+	viper.AutomaticEnv()
+	viper.BindPFlags(pflag.CommandLine)
+
+	// logging
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	if viper.GetBool("debug") {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
+
+	// set up kdc proxy
+	k := kdcproxy.InitKdcProxy(viper.GetString("realm"))
+
+	// http handler
+	http.HandleFunc("/KdcProxy", k.Handler)
+	srv := http.Server{
+		Addr:         viper.GetString("listen"),
+		ReadTimeout:  time.Second * 5,
+		WriteTimeout: time.Second * 5,
+	}
+
+	// run group
+	g := run.Group{}
+
+	// start server
+	if viper.GetString("cert") != "" && viper.GetString("key") != "" {
+		certctx, certcancel := context.WithCancel(context.Background())
+
+		certinel, err := fswatcher.New(viper.GetString("cert"), viper.GetString("key"))
+		if err != nil {
+			log.Fatal().Err(err).Msg("unable to read server certificate")
+		}
+
+		// add certinel
+		g.Add(func() error {
+			return certinel.Start(certctx)
+		}, func(err error) {
+			certcancel()
+		})
+
+		// add TLS enabled server
+		g.Add(func() error {
+			return srv.ListenAndServeTLS("", "")
+		}, func(err error) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				srv.Shutdown(ctx)
+				cancel()
+			}()
+		})
+
+	} else {
+		// add non-TLS enabled server
+		g.Add(func() error {
+			return srv.ListenAndServe()
+		}, func(err error) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				srv.Shutdown(ctx)
+				cancel()
+			}()
+		})
+	}
+
+	// start run group
+	if err := g.Run(); err != nil {
+		log.Fatal().Err(err).Send()
+	}
+}
