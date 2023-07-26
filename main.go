@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/andrewheberle/go-kdcproxy/kdcproxy"
 	"github.com/cloudflare/certinel/fswatcher"
+	"github.com/justinas/alice"
 	"github.com/oklog/run"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -17,7 +20,7 @@ import (
 func main() {
 	// command line flags
 	pflag.Bool("debug", false, "Enable debug logging")
-	pflag.String("listen", ":8080", "Listen address")
+	pflag.String("listen", "127.0.0.1:8080", "Listen address")
 	pflag.String("realm", "", "Kerberos realm")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
@@ -34,12 +37,32 @@ func main() {
 	if viper.GetBool("debug") {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+
+	// set up middelware chain for logging
+	c := alice.New()
+	c = c.Append(hlog.NewHandler(logger))
+	c = c.Append(hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
+		hlog.FromRequest(r).Info().
+			Str("method", r.Method).
+			Stringer("url", r.URL).
+			Int("status", status).
+			Int("size", size).
+			Dur("duration", duration).
+			Msg("")
+	}))
+	c = c.Append(hlog.RemoteAddrHandler("ip"))
+	c = c.Append(hlog.UserAgentHandler("user_agent"))
+	c = c.Append(hlog.RefererHandler("referer"))
+	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
 	k := kdcproxy.InitKdcProxy(viper.GetString("realm"))
 
-	// http handler
-	http.HandleFunc("/KdcProxy", k.Handler)
+	// add to http service
+	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))
+
+	// set up server
 	srv := http.Server{
 		Addr:         viper.GetString("listen"),
 		ReadTimeout:  time.Second * 5,
