@@ -23,7 +23,8 @@ func main() {
 	// command line flags
 	pflag.Bool("debug", false, "Enable debug logging")
 	pflag.String("listen", "127.0.0.1:8080", "Listen address")
-	pflag.String("realm", "", "Kerberos realm")
+	pflag.String("keytab", "", "Kerberos keytab")
+	pflag.String("krb5conf", "", "Kerberos config file")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
 	pflag.Parse()
@@ -46,10 +47,11 @@ func main() {
 
 	// logging about command line
 	log.Info().
-		Str("realm", viper.GetString("realm")).
+		Str("krb5conf", viper.GetString("krb5conf")).
 		Str("listen", viper.GetString("listen")).
 		Str("cert", viper.GetString("cert")).
 		Str("key", viper.GetString("key")).
+		Bool("debug", viper.GetBool("debug")).
 		Msg("configuration options")
 
 	// set up middelware chain for logging
@@ -69,8 +71,17 @@ func main() {
 	c = c.Append(hlog.RefererHandler("referer"))
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
+	// load keytab
+	/*keytab, err := keytab.Load(viper.GetString("krb5conf"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not load keytab")
+	}*/
+
 	// set up kdc proxy
-	k := kdcproxy.InitKdcProxy(viper.GetString("realm"))
+	k, err := kdcproxy.InitKdcProxy(viper.GetString("krb5conf"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not load kerberos config")
+	}
 
 	// add to http service
 	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))

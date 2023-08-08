@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	maxLength = 128 * 1024
-	timeout   = 5 * time.Second
+	maxLength        = 128 * 1024
+	timeout          = 5 * time.Second
+	systemConfigPath = "/etc/krb5.conf"
 )
 
 type KdcProxyMsg struct {
@@ -27,11 +28,13 @@ type KerberosProxy struct {
 	krb5Config *krb5config.Config
 }
 
-func InitKdcProxy(realm string) KerberosProxy {
-	config := krb5config.New()
-	config.LibDefaults.DNSLookupKDC = true
-	config.LibDefaults.DefaultRealm = realm
-	return KerberosProxy{config}
+func InitKdcProxy(krb5Conf string) (KerberosProxy, error) {
+	path := systemConfigPath
+	if krb5Conf != "" {
+		path = krb5Conf
+	}
+	cfg, err := krb5config.Load(path)
+	return KerberosProxy{cfg}, err
 }
 
 func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
