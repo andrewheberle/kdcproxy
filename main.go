@@ -44,6 +44,14 @@ func main() {
 	})
 	logger := zerolog.New(logwriter).With().Timestamp().Logger()
 
+	// logging about command line
+	log.Info().
+		Str("realm", viper.GetString("realm")).
+		Str("listen", viper.GetString("listen")).
+		Str("cert", viper.GetString("cert")).
+		Str("key", viper.GetString("key")).
+		Msg("configuration options")
+
 	// set up middelware chain for logging
 	c := alice.New()
 	c = c.Append(hlog.NewHandler(logger))
