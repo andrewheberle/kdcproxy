@@ -60,7 +60,6 @@ func main() {
 	c = c.Append(hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
 		hlog.FromRequest(r).Info().
 			Str("method", r.Method).
-			Interface("headers", r.Header).
 			Stringer("url", r.URL).
 			Int("status", status).
 			Int("size", size).
