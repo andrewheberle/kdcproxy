@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/justinas/alice"
 	"github.com/oklog/run"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/diode"
 	"github.com/rs/zerolog/hlog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
@@ -37,7 +39,10 @@ func main() {
 	if viper.GetBool("debug") {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logwriter := diode.NewWriter(os.Stdout, 1000, 0, func(missed int) {
+		fmt.Printf("Dropped %d messages\n", missed)
+	})
+	logger := zerolog.New(logwriter).With().Timestamp().Logger()
 
 	// set up middelware chain for logging
 	c := alice.New()
