@@ -1,6 +1,6 @@
 module github.com/andrewheberle/go-kdcproxy
 
-go 1.19
+go 1.20
 
 require (
 	github.com/bolkedebruin/gokrb5/v8 v8.5.0

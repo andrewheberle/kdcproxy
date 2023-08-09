@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/diode"
 	"github.com/rs/zerolog/hlog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -46,7 +45,7 @@ func main() {
 	logger := zerolog.New(logwriter).With().Timestamp().Logger()
 
 	// logging about command line
-	log.Info().
+	logger.Info().
 		Str("krb5conf", viper.GetString("krb5conf")).
 		Str("listen", viper.GetString("listen")).
 		Str("cert", viper.GetString("cert")).
@@ -78,9 +77,9 @@ func main() {
 	}*/
 
 	// set up kdc proxy
-	k, err := kdcproxy.InitKdcProxy(viper.GetString("krb5conf"))
+	k, err := kdcproxy.InitKdcProxy(viper.GetString("krb5conf"), logger)
 	if err != nil {
-		log.Fatal().Err(err).Msg("could not load kerberos config")
+		logger.Fatal().Err(err).Msg("could not load kerberos config")
 	}
 
 	// add to http service
@@ -102,7 +101,7 @@ func main() {
 
 		certinel, err := fswatcher.New(viper.GetString("cert"), viper.GetString("key"))
 		if err != nil {
-			log.Fatal().Err(err).Msg("unable to read server certificate")
+			logger.Fatal().Err(err).Msg("unable to read server certificate")
 		}
 
 		// add certinel
@@ -138,6 +137,6 @@ func main() {
 
 	// start run group
 	if err := g.Run(); err != nil {
-		log.Fatal().Err(err).Send()
+		logger.Fatal().Err(err).Send()
 	}
 }

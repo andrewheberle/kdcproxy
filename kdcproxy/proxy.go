@@ -9,7 +9,7 @@ import (
 	"time"
 
 	krb5config "github.com/bolkedebruin/gokrb5/v8/config"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -26,15 +26,19 @@ type KdcProxyMsg struct {
 
 type KerberosProxy struct {
 	krb5Config *krb5config.Config
+	logger     zerolog.Logger
 }
 
-func InitKdcProxy(krb5Conf string) (KerberosProxy, error) {
+func InitKdcProxy(krb5Conf string, logger zerolog.Logger) (KerberosProxy, error) {
 	path := systemConfigPath
 	if krb5Conf != "" {
 		path = krb5Conf
 	}
 	cfg, err := krb5config.Load(path)
-	return KerberosProxy{cfg}, err
+	if err == nil {
+		logger.Debug().Interface("krb5config", cfg).Msg("kerberos config")
+	}
+	return KerberosProxy{cfg, logger}, err
 }
 
 func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
@@ -57,28 +61,28 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	data := make([]byte, length)
 	_, err := io.ReadFull(r.Body, data)
 	if err != nil {
-		log.Error().Err(err).Msg("Error reading from stream")
+		k.logger.Error().Err(err).Msg("Error reading from stream")
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
 
 	msg, err := decode(data)
 	if err != nil {
-		log.Error().Err(err).Msg("Cannot unmarshal")
+		k.logger.Error().Err(err).Msg("Cannot unmarshal")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
 	krb5resp, err := k.forward(msg.Realm, msg.Message)
 	if err != nil {
-		log.Error().Err(err).Msg("cannot forward to kdc")
+		k.logger.Error().Err(err).Msg("cannot forward to kdc")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
 	reply, err := encode(krb5resp)
 	if err != nil {
-		log.Error().Err(err).Msg("unable to encode krb5 message")
+		k.logger.Error().Err(err).Msg("unable to encode krb5 message")
 		http.Error(w, "encoding error", http.StatusInternalServerError)
 	}
 
@@ -100,14 +104,14 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 	for i := range kdcs {
 		conn, err := net.Dial("tcp", kdcs[i])
 		if err != nil {
-			log.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error connecting, trying next if available")
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error connecting, trying next if available")
 			continue
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
 		_, err = conn.Write(data)
 		if err != nil {
-			log.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
 			continue
 		}
@@ -115,7 +119,7 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 		// todo check header
 		resp, err = io.ReadAll(conn)
 		if err != nil {
-			log.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading from kdc, trying next if available")
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading from kdc, trying next if available")
 			conn.Close()
 			continue
 		}
@@ -145,12 +149,7 @@ func encode(krb5data []byte) (r []byte, err error) {
 	m := KdcProxyMsg{Message: krb5data}
 	enc, err := asn1.Marshal(m)
 	if err != nil {
-		log.Error().Err(err).Msg("cannot marshal")
 		return nil, err
 	}
 	return enc, nil
-}
-
-func getkdcs(realm string) {
-
 }
