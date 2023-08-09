@@ -47,6 +47,7 @@ func main() {
 
 	// logging about command line
 	logger.Info().
+		Str("keytab", viper.GetString("keytab")).
 		Str("krb5conf", viper.GetString("krb5conf")).
 		Str("listen", viper.GetString("listen")).
 		Str("cert", viper.GetString("cert")).
