@@ -75,9 +75,10 @@ func main() {
 	if viper.GetString("keytab") != "" {
 		kt, err := keytab.Load(viper.GetString("keytab"))
 		if err != nil {
-			logger.Fatal().Err(err).Msg("could not load keytab")
+			logger.Error().Err(err).Msg("could not load keytab")
+		} else {
+			logger.Debug().Str("keytab", kt.String())
 		}
-		logger.Debug().Str("keytab", kt.String())
 	}
 
 	// set up kdc proxy
