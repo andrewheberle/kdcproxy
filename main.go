@@ -78,7 +78,7 @@ func main() {
 		if err != nil {
 			logger.Error().Err(err).Msg("could not load keytab")
 		} else {
-			logger.Debug().Str("keytab", kt.String())
+			logger.Debug().Str("keytab", kt.String()).Send()
 		}
 	}
 
