@@ -20,8 +20,8 @@ const (
 
 type KdcProxyMsg struct {
 	Message []byte `asn1:"tag:0,explicit"`
-	Realm   string `asn1:"tag:1,explicit"`
-	Flags   int    `asn1:"tag:2,explicit"`
+	Realm   string `asn1:"tag:1,optional"`
+	Flags   int    `asn1:"tag:2,optional"`
 }
 
 type KerberosProxy struct {
