@@ -58,6 +58,7 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// read data from request body
 	data := make([]byte, length)
 	_, err := io.ReadFull(r.Body, data)
 	if err != nil {
@@ -66,6 +67,7 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// decode the message
 	msg, err := decode(data)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("Cannot unmarshal")
@@ -73,6 +75,9 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	k.logger.Debug().Str("realm", msg.Realm).Msg("decoded kerberos message")
+
+	// forward to kdc(s)
 	krb5resp, err := k.forward(msg.Realm, msg.Message)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("cannot forward to kdc")
@@ -80,12 +85,14 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// encode response
 	reply, err := encode(krb5resp)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("unable to encode krb5 message")
 		http.Error(w, "encoding error", http.StatusInternalServerError)
 	}
 
+	// send back to client
 	w.Header().Set("Content-Type", "application/kerberos")
 	w.Write(reply)
 }
