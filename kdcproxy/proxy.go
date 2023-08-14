@@ -91,7 +91,6 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err error) {
-
 	if realm == "" {
 		realm = k.krb5Config.LibDefaults.DefaultRealm
 	}
@@ -102,14 +101,6 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", realm, err)
 	}
 
-	// build message
-	m, err := asn1.Marshal(KdcProxyMsg{
-		Message: data,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error encoding message: %w", err)
-	}
-
 	for i := range kdcs {
 		conn, err := net.Dial("tcp", kdcs[i])
 		if err != nil {
@@ -118,7 +109,7 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
-		_, err = conn.Write(m)
+		_, err = conn.Write(data)
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
