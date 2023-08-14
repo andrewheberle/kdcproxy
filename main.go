@@ -23,8 +23,7 @@ func main() {
 	// command line flags
 	pflag.Bool("debug", false, "Enable debug logging")
 	pflag.String("listen", "127.0.0.1:8080", "Listen address")
-	pflag.String("keytab", "", "Kerberos keytab")
-	pflag.String("krb5conf", "", "Kerberos config file")
+	pflag.String("realm", "", "Default Kerberos realm")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
 	pflag.Parse()
@@ -83,7 +82,7 @@ func main() {
 	}
 
 	// set up kdc proxy
-	k, err := kdcproxy.InitKdcProxy(viper.GetString("krb5conf"), logger)
+	k, err := kdcproxy.InitKdcProxy(logger, viper.GetString("realm"))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("could not load kerberos config")
 	}

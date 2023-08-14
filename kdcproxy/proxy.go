@@ -20,7 +20,7 @@ const (
 
 type KdcProxyMsg struct {
 	Message []byte `asn1:"tag:0,explicit"`
-	Realm   string `asn1:"tag:1,ia5,optional"`
+	Realm   string `asn1:"tag:1,optional"`
 	Flags   int    `asn1:"tag:2,optional"`
 }
 
@@ -29,16 +29,10 @@ type KerberosProxy struct {
 	logger     zerolog.Logger
 }
 
-func InitKdcProxy(krb5Conf string, logger zerolog.Logger) (KerberosProxy, error) {
-	path := systemConfigPath
-	if krb5Conf != "" {
-		path = krb5Conf
-	}
-	cfg, err := krb5config.Load(path)
-	if err == nil {
-		logger.Debug().Interface("krb5config", cfg).Msg("kerberos config")
-	}
-	return KerberosProxy{cfg, logger}, err
+func InitKdcProxy(logger zerolog.Logger, realm string) (KerberosProxy, error) {
+	cfg := krb5config.New()
+	cfg.LibDefaults.DefaultRealm = realm
+	return KerberosProxy{cfg, logger}, nil
 }
 
 func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
