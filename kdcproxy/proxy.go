@@ -67,14 +67,8 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if length < 4 {
-		k.logger.Error().Int64("length", length).Msg("Request was too small")
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-
 	// decode the message
-	msg, err := decode(data[4:])
+	msg, err := decode(data)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("Cannot unmarshal")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
