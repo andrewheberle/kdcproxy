@@ -57,7 +57,7 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	data := make([]byte, length)
 	_, err := io.ReadFull(r.Body, data)
 	if err != nil {
-		k.logger.Error().Err(err).Msg("Error reading from stream")
+		k.logger.Error().Err(err).Msg("error reading from stream")
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
@@ -65,15 +65,10 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// decode the message
 	msg, err := decode(data)
 	if err != nil {
-		k.logger.Error().Err(err).Msg("Cannot unmarshal")
+		k.logger.Error().Err(err).Msg("cannot unmarshal")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-
-	k.logger.Debug().
-		Str("realm", msg.Realm).
-		Int("flags", msg.Flags).
-		Send()
 
 	// forward to kdc(s)
 	krb5resp, err := k.forward(msg.Realm, msg.Message)
@@ -96,14 +91,23 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err error) {
+
 	if realm == "" {
 		realm = k.krb5Config.LibDefaults.DefaultRealm
 	}
 
-	// load udp first as is the default for kerberos
-	c, kdcs, err := k.krb5Config.GetKDCs(realm, false)
+	// do tcp only
+	c, kdcs, err := k.krb5Config.GetKDCs(realm, true)
 	if err != nil || c < 1 {
 		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", realm, err)
+	}
+
+	// build message
+	m, err := asn1.Marshal(KdcProxyMsg{
+		Message: data,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error encoding message: %w", err)
 	}
 
 	for i := range kdcs {
@@ -114,7 +118,7 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
-		_, err = conn.Write(data)
+		_, err = conn.Write(m)
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
