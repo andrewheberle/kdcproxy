@@ -67,15 +67,24 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if length < 4 {
+		k.logger.Error().Int64("length", length).Msg("Request was too small")
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
 	// decode the message
-	msg, err := decode(data)
+	msg, err := decode(data[4:])
 	if err != nil {
 		k.logger.Error().Err(err).Msg("Cannot unmarshal")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	k.logger.Debug().Str("realm", msg.Realm).Msg("decoded kerberos message")
+	k.logger.Debug().
+		Str("realm", msg.Realm).
+		Int("flags", msg.Flags).
+		Send()
 
 	// forward to kdc(s)
 	krb5resp, err := k.forward(msg.Realm, msg.Message)
