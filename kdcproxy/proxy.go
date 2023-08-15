@@ -15,7 +15,6 @@ import (
 const (
 	maxLength        = 128 * 1024
 	timeout          = 5 * time.Second
-	systemConfigPath = "/etc/krb5.conf"
 )
 
 type KdcProxyMsg struct {
