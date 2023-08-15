@@ -22,7 +22,6 @@ func main() {
 	// command line flags
 	pflag.Bool("debug", false, "Enable debug logging")
 	pflag.String("listen", "127.0.0.1:8080", "Listen address")
-	pflag.String("realm", "", "Default Kerberos realm")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
 	pflag.Parse()
@@ -45,7 +44,6 @@ func main() {
 
 	// logging about command line
 	logger.Info().
-		Str("realm", viper.GetString("realm")).
 		Str("cert", viper.GetString("cert")).
 		Str("key", viper.GetString("key")).
 		Bool("debug", viper.GetBool("debug")).
@@ -69,10 +67,7 @@ func main() {
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
-	k, err := kdcproxy.InitKdcProxy(logger, viper.GetString("realm"))
-	if err != nil {
-		logger.Fatal().Err(err).Msg("could not load kerberos config")
-	}
+	k := kdcproxy.InitKdcProxy(logger)
 
 	// add to http service
 	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))

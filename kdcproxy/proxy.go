@@ -29,17 +29,16 @@ type KerberosProxy struct {
 	logger     zerolog.Logger
 }
 
-func InitKdcProxy(logger zerolog.Logger, realm string) (KerberosProxy, error) {
+func InitKdcProxy(logger zerolog.Logger) *KerberosProxy {
 	cfg := krb5config.New()
-	cfg.LibDefaults.DefaultRealm = realm
 	cfg.LibDefaults.DNSLookupKDC = true
 
 	logger.Debug().Interface("cfg", cfg).Send()
 
-	return KerberosProxy{cfg, logger}, nil
+	return &KerberosProxy{cfg, logger}
 }
 
-func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
+func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
