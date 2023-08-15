@@ -54,13 +54,15 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// read data from request body
-	data := make([]byte, length)
-	_, err := io.ReadFull(r.Body, data)
+	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("error reading from stream")
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
+	defer r.Body.Close()
+
+	k.logger.Debug().Bytes("data", data).Send()
 
 	// decode the message
 	msg, err := decode(data)
@@ -69,6 +71,8 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+
+	k.logger.Debug().Interface("msg", msg).Send()
 
 	// forward to kdc(s)
 	krb5resp, err := k.forward(msg.Realm, msg.Message)
