@@ -9,8 +9,6 @@ FROM gcr.io/distroless/base-debian11:latest@sha256:73deaaf6a207c1a33850257ba74e0
 
 COPY --from=builder /build/go-kdcproxy /app/go-kdcproxy
 
-COPY krb5.conf /etc/krb5.conf
-
 ENV KDC_PROXY_LISTEN=:8080
 
 EXPOSE 8080
