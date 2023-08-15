@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/andrewheberle/go-kdcproxy/kdcproxy"
-	"github.com/bolkedebruin/gokrb5/v8/keytab"
 	"github.com/cloudflare/certinel/fswatcher"
 	"github.com/justinas/alice"
 	"github.com/oklog/run"
@@ -68,16 +67,6 @@ func main() {
 	c = c.Append(hlog.UserAgentHandler("user_agent"))
 	c = c.Append(hlog.RefererHandler("referer"))
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
-
-	// load keytab if specified
-	if viper.GetString("keytab") != "" {
-		kt, err := keytab.Load(viper.GetString("keytab"))
-		if err != nil {
-			logger.Error().Err(err).Msg("could not load keytab")
-		} else {
-			logger.Debug().Str("keytab", kt.String()).Send()
-		}
-	}
 
 	// set up kdc proxy
 	k, err := kdcproxy.InitKdcProxy(logger, viper.GetString("realm"))

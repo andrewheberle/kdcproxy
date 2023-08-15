@@ -33,6 +33,9 @@ func InitKdcProxy(logger zerolog.Logger, realm string) (KerberosProxy, error) {
 	cfg := krb5config.New()
 	cfg.LibDefaults.DefaultRealm = realm
 	cfg.LibDefaults.DNSLookupKDC = true
+
+	logger.Debug().Interface("cfg", cfg).Send()
+
 	return KerberosProxy{cfg, logger}, nil
 }
 
