@@ -73,12 +73,6 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	k.logger.Debug().
-		Bytes("message", msg.Message).
-		Str("realm", msg.Realm).
-		Int("flags", msg.Flags).
-		Send()
-
 	// fail if no realm is specified
 	if msg.Realm == "" {
 		k.logger.Error().Msg("realm must not be empty")
