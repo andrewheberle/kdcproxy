@@ -9,6 +9,7 @@ import (
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/rs/zerolog"
 )
 
@@ -18,9 +19,9 @@ const (
 )
 
 type KdcProxyMsg struct {
-	Message []byte `asn1:"tag:0,explicit"`
-	Realm   string `asn1:"tag:1,optional,generalstring"`
-	Flags   int    `asn1:"tag:2,optional"`
+	KerbMessage   []byte `asn1:"tag:0,explicit"`
+	TargetDomain  string `asn1:"tag:1,optional,generalstring"`
+	DcLocatorHint int    `asn1:"tag:2,optional"`
 }
 
 type KerberosProxy struct {
@@ -72,8 +73,8 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// fail if no realm is specified
-	if msg.Realm == "" {
-		k.logger.Error().Msg("realm must not be empty")
+	if msg.TargetDomain == "" {
+		k.logger.Error().Msg("target-domain must not be empty")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -100,9 +101,9 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 	// do tcp only
-	c, kdcs, err := k.krb5Config.GetKDCs(msg.Realm, true)
+	c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, true)
 	if err != nil || c < 1 {
-		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", msg.Realm, err)
+		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", msg.TargetDomain, err)
 	}
 
 	for i := range kdcs {
@@ -113,7 +114,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
-		_, err = conn.Write(msg.Message)
+		_, err = conn.Write(msg.KerbMessage)
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
@@ -132,7 +133,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 		return resp, nil
 	}
 
-	return nil, fmt.Errorf("no kdcs found for realm %s", msg.Realm)
+	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
 }
 
 func decode(data []byte) (msg *KdcProxyMsg, err error) {
@@ -146,11 +147,46 @@ func decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
-	return &m, nil
+	// ensure message is a valid kerberos message
+	var (
+		as   messages.ASReq
+		ap   messages.APReq
+		priv messages.APReq
+		tgs  messages.TGSReq
+	)
+	if _, err := asn1.Unmarshal(msg.KerbMessage, &as); err == nil {
+		if m.TargetDomain == "" {
+			m.TargetDomain = as.ReqBody.Realm
+		}
+		return &m, nil
+	}
+
+	if _, err := asn1.Unmarshal(msg.KerbMessage, &tgs); err == nil {
+		if m.TargetDomain == "" {
+			m.TargetDomain = tgs.ReqBody.Realm
+		}
+		return &m, nil
+	}
+
+	if _, err := asn1.Unmarshal(msg.KerbMessage, &ap); err == nil {
+		if m.TargetDomain == "" {
+			m.TargetDomain = ap.Ticket.Realm
+		}
+		return &m, nil
+	}
+
+	if _, err := asn1.Unmarshal(msg.KerbMessage, &priv); err == nil {
+		if m.TargetDomain == "" {
+			m.TargetDomain = priv.Ticket.Realm
+		}
+		return &m, nil
+	}
+
+	return nil, fmt.Errorf("message was not valid")
 }
 
 func encode(krb5data []byte) (r []byte, err error) {
-	m := KdcProxyMsg{Message: krb5data}
+	m := KdcProxyMsg{KerbMessage: krb5data}
 	enc, err := asn1.Marshal(m)
 	if err != nil {
 		return nil, err
