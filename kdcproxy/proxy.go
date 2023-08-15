@@ -73,7 +73,11 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	k.logger.Debug().Interface("msg", msg).Send()
+	k.logger.Debug().
+		Bytes("message", msg.Message).
+		Str("realm", msg.Realm).
+		Int("flags", msg.Flags).
+		Send()
 
 	// fail if no realm is specified
 	if msg.Realm == "" {
@@ -83,7 +87,7 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// forward to kdc(s)
-	krb5resp, err := k.forward(msg)
+	resp, err := k.forward(msg)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("cannot forward to kdc")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
@@ -91,7 +95,7 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// encode response
-	reply, err := encode(krb5resp)
+	reply, err := encode(resp)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("unable to encode krb5 message")
 		http.Error(w, "encoding error", http.StatusInternalServerError)
