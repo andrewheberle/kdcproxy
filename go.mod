@@ -3,8 +3,9 @@ module github.com/andrewheberle/go-kdcproxy
 go 1.20
 
 require (
-	github.com/bolkedebruin/gokrb5/v8 v8.5.0
 	github.com/cloudflare/certinel v0.4.0
+	github.com/jcmturner/gofork v1.7.6
+	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/justinas/alice v1.2.0
 	github.com/oklog/run v1.1.0
 	github.com/rs/zerolog v1.29.1
@@ -16,7 +17,6 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
-	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect

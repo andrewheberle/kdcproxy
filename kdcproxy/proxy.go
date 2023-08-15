@@ -1,25 +1,25 @@
 package kdcproxy
 
 import (
-	"encoding/asn1"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"time"
 
-	krb5config "github.com/bolkedebruin/gokrb5/v8/config"
+	"github.com/jcmturner/gofork/encoding/asn1"
+	krb5config "github.com/jcmturner/gokrb5/v8/config"
 	"github.com/rs/zerolog"
 )
 
 const (
-	maxLength        = 128 * 1024
-	timeout          = 5 * time.Second
+	maxLength = 128 * 1024
+	timeout   = 5 * time.Second
 )
 
 type KdcProxyMsg struct {
 	Message []byte `asn1:"tag:0,explicit"`
-	Realm   string `asn1:"tag:1,optional"`
+	Realm   string `asn1:"tag:1,optional,generalstring"`
 	Flags   int    `asn1:"tag:2,optional"`
 }
 
