@@ -154,28 +154,28 @@ func decode(data []byte) (msg *KdcProxyMsg, err error) {
 		priv messages.APReq
 		tgs  messages.TGSReq
 	)
-	if _, err := asn1.Unmarshal(msg.KerbMessage, &as); err == nil {
+	if err := as.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = as.ReqBody.Realm
 		}
 		return &m, nil
 	}
 
-	if _, err := asn1.Unmarshal(msg.KerbMessage, &tgs); err == nil {
+	if err := tgs.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = tgs.ReqBody.Realm
 		}
 		return &m, nil
 	}
 
-	if _, err := asn1.Unmarshal(msg.KerbMessage, &ap); err == nil {
+	if err := ap.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = ap.Ticket.Realm
 		}
 		return &m, nil
 	}
 
-	if _, err := asn1.Unmarshal(msg.KerbMessage, &priv); err == nil {
+	if err := priv.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = priv.Ticket.Realm
 		}
