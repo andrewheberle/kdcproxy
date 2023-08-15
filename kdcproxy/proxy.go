@@ -74,6 +74,13 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 	k.logger.Debug().Interface("msg", msg).Send()
 
+	inner, err := decode(msg.Message)
+	if err != nil {
+		k.logger.Debug().Err(err).Send()
+	} else {
+		k.logger.Debug().Interface("innner", inner).Send()
+	}
+
 	// forward to kdc(s)
 	krb5resp, err := k.forward(msg.Realm, msg.Message)
 	if err != nil {
