@@ -75,8 +75,15 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 	k.logger.Debug().Interface("msg", msg).Send()
 
+	// fail if no realm is specified
+	if msg.Realm == "" {
+		k.logger.Error().Msg("realm must not be empty")
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
 	// forward to kdc(s)
-	krb5resp, err := k.forward(msg.Realm, msg.Message)
+	krb5resp, err := k.forward(msg)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("cannot forward to kdc")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
@@ -95,15 +102,11 @@ func (k KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(reply)
 }
 
-func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err error) {
-	if realm == "" {
-		realm = k.krb5Config.LibDefaults.DefaultRealm
-	}
-
+func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 	// do tcp only
-	c, kdcs, err := k.krb5Config.GetKDCs(realm, true)
+	c, kdcs, err := k.krb5Config.GetKDCs(msg.Realm, true)
 	if err != nil || c < 1 {
-		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", realm, err)
+		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", msg.Realm, err)
 	}
 
 	for i := range kdcs {
@@ -114,7 +117,7 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
-		_, err = conn.Write(data)
+		_, err = conn.Write(msg.Message)
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
@@ -133,7 +136,7 @@ func (k *KerberosProxy) forward(realm string, data []byte) (resp []byte, err err
 		return resp, nil
 	}
 
-	return nil, fmt.Errorf("no kdcs found for realm %s", realm)
+	return nil, fmt.Errorf("no kdcs found for realm %s", msg.Realm)
 }
 
 func decode(data []byte) (msg *KdcProxyMsg, err error) {
