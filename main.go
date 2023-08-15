@@ -42,13 +42,6 @@ func main() {
 	})
 	logger := zerolog.New(logwriter).With().Timestamp().Logger()
 
-	// logging about command line
-	logger.Info().
-		Str("cert", viper.GetString("cert")).
-		Str("key", viper.GetString("key")).
-		Bool("debug", viper.GetBool("debug")).
-		Msg("configuration options")
-
 	// set up middelware chain for logging
 	c := alice.New()
 	c = c.Append(hlog.NewHandler(logger))
@@ -84,6 +77,9 @@ func main() {
 
 	// start server
 	if viper.GetString("cert") != "" && viper.GetString("key") != "" {
+		// logging about command line
+		logger.Info().Str("cert", viper.GetString("cert")).Str("key", viper.GetString("key")).Msg("setting up tls server")
+
 		certctx, certcancel := context.WithCancel(context.Background())
 
 		certinel, err := fswatcher.New(viper.GetString("cert"), viper.GetString("key"))
@@ -110,6 +106,9 @@ func main() {
 		})
 
 	} else {
+		// logging about command line
+		logger.Info().Msg("setting up server")
+
 		// add non-TLS enabled server
 		g.Add(func() error {
 			return srv.ListenAndServe()
