@@ -132,7 +132,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		}
 
 		// work out length of message
-		length, err := klen(buf)
+		length, err := klen(buf[:])
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error parsing length from kdc, trying next if available")
 			conn.Close()
@@ -223,12 +223,12 @@ func encode(krb5data []byte) (r []byte, err error) {
 	return enc, nil
 }
 
-// returns the length of a kerberos message based on the leading 4-bytes
+// Returns the length of a kerberos message based on the leading 4-bytes
 func klen(data []byte) (uint32, error) {
 	if len(data) < 4 {
 		return 0, fmt.Errorf("invalid length")
 	}
-	n := binary.BigEndian.Uint32(data[0:3])
+	n := binary.BigEndian.Uint32(data[:3])
 
 	return n, nil
 }
