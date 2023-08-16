@@ -24,6 +24,7 @@ func main() {
 	pflag.String("listen", "127.0.0.1:8080", "Service listen address")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
+	pflag.String("krb5conf", "", "Path to krb5.conf")
 	pflag.Parse()
 
 	// viper setup
@@ -60,7 +61,10 @@ func main() {
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
-	k := kdcproxy.InitKdcProxy(logger, true)
+	k, err := kdcproxy.InitKdcProxyWithConfig(logger, viper.GetString("krb5conf"))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("could not set up kdc proxy")
+	}
 
 	// add to http service
 	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))

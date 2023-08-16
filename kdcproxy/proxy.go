@@ -31,17 +31,30 @@ type KerberosProxy struct {
 	protocols  []string
 }
 
-func InitKdcProxy(logger zerolog.Logger, tcpOnly bool) *KerberosProxy {
-	cfg := krb5config.New()
-	cfg.LibDefaults.DNSLookupKDC = true
+func InitKdcProxy(logger zerolog.Logger) (*KerberosProxy, error) {
+	return initproxy(logger, "")
+}
 
-	logger.Debug().Interface("cfg", cfg).Send()
+func InitKdcProxyWithConfig(logger zerolog.Logger, config string) (*KerberosProxy, error) {
+	return initproxy(logger, config)
+}
 
-	if tcpOnly {
-		return &KerberosProxy{cfg, logger, []string{"tcp"}}
+func initproxy(logger zerolog.Logger, config string) (*KerberosProxy, error) {
+	// with no config rely on DNS to find KDC
+	if config == "" {
+		cfg := krb5config.New()
+		cfg.LibDefaults.DNSLookupKDC = true
+
+		return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}, nil
 	}
 
-	return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}
+	// load config from file
+	cfg, err := krb5config.Load(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}, nil
 }
 
 func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
@@ -106,8 +119,14 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
-	// do tcp only at the moment first
-	for _, proto := range k.protocols {
+	// if message is too large only use TCP
+	protocols := k.protocols
+	if len(msg.KerbMessage) > k.krb5Config.LibDefaults.UDPPreferenceLimit {
+		protocols = []string{"tcp"}
+	}
+
+	// try protocol options
+	for _, proto := range protocols {
 		logger := k.logger.With().Str("realm", msg.TargetDomain).Str("proto", proto).Logger()
 		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == "tcp")
 		if err != nil || c < 1 {
