@@ -19,7 +19,7 @@ go build github.com/andrewheberle/kdcproxy/cmd/kdcproxy
 ## Docker
 
 ```sh
-docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.1.1
+docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.2.0
 ```
 
 To run via HTTPS:
@@ -29,7 +29,7 @@ docker run -p 8443:8080 \
     -e KDC_PROXY_CERT=/ssl/server.crt \
     -e KDC_PROXY_KEY=/ssl/server.key \
     -v /path/to/certificates:/ssl:ro \
-    ghcr.io/andrewheberle/kdcproxy:v1.1.1
+    ghcr.io/andrewheberle/kdcproxy:v1.2.0
 ```
 
 # Configuration
