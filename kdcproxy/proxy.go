@@ -153,13 +153,13 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			conn.SetDeadline(time.Now().Add(timeout))
 
 			// for udp trim off length
-			req := msg.KerbMessage
+			/* req := msg.KerbMessage
 			if proto == "udp" {
 				req = msg.KerbMessage[4:]
-			}
+			} */
 
 			// send message
-			n, err := conn.Write(req)
+			n, err := conn.Write(msg.KerbMessage)
 			if err != nil {
 				logger.Warn().Err(err).Msg("cannot write packet data, trying next if available")
 				conn.Close()
