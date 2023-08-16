@@ -119,15 +119,20 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
+	// some debugging
+	k.logger.Debug().Interface("msg", msg).Msg("KDC_PROXY_MESSAGE request")
+
 	// if message is too large only use TCP
 	protocols := k.protocols
-	if len(msg.KerbMessage) > k.krb5Config.LibDefaults.UDPPreferenceLimit {
+	if len(msg.KerbMessage)-4 > k.krb5Config.LibDefaults.UDPPreferenceLimit {
 		protocols = []string{"tcp"}
 	}
 
 	// try protocol options
 	for _, proto := range protocols {
-		logger := k.logger.With().Str("realm", msg.TargetDomain).Str("proto", proto).Logger()
+		logger := k.logger.With().Str("realm", msg.TargetDomain).Str("protocol", proto).Logger()
+
+		// get kdcs
 		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == "tcp")
 		if err != nil || c < 1 {
 			logger.Warn().Err(err).Msg("cannot get kdc")
