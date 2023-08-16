@@ -153,7 +153,7 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	if err := asReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		k.logger.Debug().Interface("message", asReq).Msg("KRB_AS_REQ")
 		return &KdcProxyMsg{
-			KerbMessage:  m.KerbMessage[4:],
+			KerbMessage:  m.KerbMessage,
 			TargetDomain: asReq.ReqBody.Realm,
 		}, nil
 	}
@@ -163,7 +163,7 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	if err := tgsReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		k.logger.Debug().Interface("message", tgsReq).Msg("KRB_TGS_REQ")
 		return &KdcProxyMsg{
-			KerbMessage:  m.KerbMessage[4:],
+			KerbMessage:  m.KerbMessage,
 			TargetDomain: tgsReq.ReqBody.Realm,
 		}, nil
 	}
@@ -173,7 +173,7 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	if err := apReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		k.logger.Debug().Interface("message", apReq).Msg("KRB_AP_REQ")
 		return &KdcProxyMsg{
-			KerbMessage:  m.KerbMessage[4:],
+			KerbMessage:  m.KerbMessage,
 			TargetDomain: apReq.Ticket.Realm,
 		}, nil
 	}
