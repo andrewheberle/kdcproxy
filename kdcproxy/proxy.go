@@ -159,8 +159,16 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			}
 
 			// send message
-			if _, err := conn.Write(req); err != nil {
+			n, err := conn.Write(req)
+			if err != nil {
 				logger.Warn().Err(err).Msg("cannot write packet data, trying next if available")
+				conn.Close()
+				continue
+			}
+
+			// check that all the data was sent
+			if n != len(req) {
+				logger.Warn().Int("expected", len(req)).Int("actual", n).Msg("did not write all data")
 				conn.Close()
 				continue
 			}
@@ -227,7 +235,7 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 		return nil, err
 	}
 
-	// make sure no tailing data exists
+	// make sure no trailing data exists
 	if len(rest) > 0 {
 		return nil, fmt.Errorf("trailing data in request")
 	}
