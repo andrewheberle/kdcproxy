@@ -145,14 +145,14 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		if n-4 == int(length) {
 			k.logger.Debug().Msg("got whole response initially")
 			conn.Close()
-			return buf, nil
+			return buf[:3+length], nil
 		}
 
 		// read rest of message
 		rlen := int(length) - (n - 4)
 		rest := make([]byte, rlen)
 		k.logger.Debug().Int("remainder", rlen).Msg("more data to come")
-		if _, err := io.ReadAtLeast(conn, rest, rlen); err != nil {
+		if _, err := io.ReadFull(conn, rest); err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading remainder of message from kdc, trying next if available")
 			conn.Close()
 			continue
@@ -161,11 +161,8 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 		k.logger.Debug().Msg("got response")
 
-		// add remainder to buffer
-		buf = append(buf, rest...)
-
-		// return message (minus length)
-		return buf, nil
+		// return message
+		return append(buf[:3+length], rest...), nil
 	}
 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
@@ -218,9 +215,8 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	return nil, fmt.Errorf("message was not valid")
 }
 
-func encode(krb5data []byte) (r []byte, err error) {
-	m := KdcProxyMsg{KerbMessage: krb5data}
-	enc, err := asn1.Marshal(m)
+func encode(data []byte) (r []byte, err error) {
+	enc, err := asn1.Marshal(KdcProxyMsg{KerbMessage: data})
 	if err != nil {
 		return nil, err
 	}
