@@ -139,6 +139,8 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			continue
 		}
 
+		k.logger.Debug().Uint32("length", length).Msg("kerberos response message")
+
 		// have we got whole message
 		if n-4 == int(length) {
 			conn.Close()
@@ -221,6 +223,7 @@ func encode(krb5data []byte) (r []byte, err error) {
 	return enc, nil
 }
 
+// returns the length of a kerberos message based on the leading 4-bytes
 func klen(data []byte) (uint32, error) {
 	if len(data) < 4 {
 		return 0, fmt.Errorf("invalid length")
