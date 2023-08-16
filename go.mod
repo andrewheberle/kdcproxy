@@ -1,4 +1,4 @@
-module github.com/andrewheberle/go-kdcproxy
+module github.com/andrewheberle/kdcproxy
 
 go 1.20
 

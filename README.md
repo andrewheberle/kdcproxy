@@ -1,9 +1,9 @@
-# go-kdcproxy
+# kdcproxy
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/andrewheberle/go-kdcproxy?style=flat)](https://goreportcard.com/report/github.com/andrewheberle/go-kdcproxy)
-[![Godoc](https://img.shields.io/badge/go-documentation-blue.svg?style=flat)](https://godoc.org/github.com/andrewheberle/go-kdcproxy)
-[![tag](https://img.shields.io/github/v/tag/andrewheberle/go-kdcproxy)](https://github.com/andrewheberle/go-kdcproxy/-/tags)
-[![LICENSE](https://img.shields.io/badge/license-MIT-blue)](https://github.com/andrewheberle/go-kdcproxy/-/blob/main/LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/andrewheberle/kdcproxy?style=flat)](https://goreportcard.com/report/github.com/andrewheberle/kdcproxy)
+[![Godoc](https://img.shields.io/badge/go-documentation-blue.svg?style=flat)](https://godoc.org/github.com/andrewheberle/kdcproxy)
+[![tag](https://img.shields.io/github/v/tag/andrewheberle/kdcproxy)](https://github.com/andrewheberle/kdcproxy/-/tags)
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue)](https://github.com/andrewheberle/kdcproxy/-/blob/main/LICENSE)
 
 This is a Go based KDC Proxy designed for use against Active Directory.
 
@@ -12,13 +12,14 @@ This is a Go based KDC Proxy designed for use against Active Directory.
 ## Command Line
 
 ```sh
-./go-kdcproxy --listen :8080
+go build github.com/andrewheberle/kdcproxy/cmd/kdcproxy
+./kdcproxy --listen :8080
 ```
 
 ## Docker
 
 ```sh
-docker run -p 8080:8080 ghcr.io/andrewheberle/go-kdcproxy:v1.1.0
+docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.1.1
 ```
 
 To run via HTTPS:
@@ -28,7 +29,7 @@ docker run -p 8443:8080 \
     -e KDC_PROXY_CERT=/ssl/server.crt \
     -e KDC_PROXY_KEY=/ssl/server.key \
     -v /path/to/certificates:/ssl:ro \
-    ghcr.io/andrewheberle/go-kdcproxy
+    ghcr.io/andrewheberle/kdcproxy:v1.1.1
 ```
 
 # Configuration
