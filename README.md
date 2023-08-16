@@ -12,7 +12,7 @@ This is a Go based KDC Proxy designed for use against Active Directory.
 ## Command Line
 
 ```sh
-go build github.com/andrewheberle/kdcproxy/cmd/kdcproxy@v1.2.1
+go install github.com/andrewheberle/kdcproxy/cmd/kdcproxy@v1.2.1
 ./kdcproxy --listen :8080
 ```
 
