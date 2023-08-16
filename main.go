@@ -68,8 +68,8 @@ func main() {
 	// set up server
 	srv := http.Server{
 		Addr:         viper.GetString("listen"),
-		ReadTimeout:  time.Second * 5,
-		WriteTimeout: time.Second * 5,
+		ReadTimeout:  time.Second * 30,
+		WriteTimeout: time.Second * 30,
 	}
 
 	// run group
