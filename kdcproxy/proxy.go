@@ -9,7 +9,10 @@ import (
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/iana"
+	"github.com/jcmturner/gokrb5/v8/iana/msgtype"
 	"github.com/jcmturner/gokrb5/v8/messages"
+	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/rs/zerolog"
 )
 
@@ -149,7 +152,14 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 	}
 
 	// set up types
-	as := messages.ASReq{}
+	as := messages.ASReq{
+		messages.KDCReqFields{
+			PVNO:    iana.PVNO,
+			MsgType: msgtype.KRB_AS_REQ,
+			PAData:  types.PADataSequence{},
+			ReqBody: messages.KDCReqBody{},
+		},
+	}
 	if err := as.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = as.ReqBody.Realm
