@@ -151,6 +151,8 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
+	k.logger.Debug().Interface("msg", msg).Send()
+
 	// set up types
 	as := messages.ASReq{
 		messages.KDCReqFields{
