@@ -122,10 +122,9 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			continue
 		}
 
-		// read response
-		buf := make([]byte, 1048576)
-		n, err := io.ReadAtLeast(conn, buf, 4)
-		if err != nil {
+		// read inital 4 bytes to get length of response
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(conn, buf); err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading message length from kdc, trying next if available")
 			conn.Close()
 			continue
@@ -139,20 +138,10 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			continue
 		}
 
-		k.logger.Debug().Uint32("length", length).Msg("kerberos response")
-
-		// have we got whole message
-		if n-4 == int(length) {
-			k.logger.Debug().Msg("got whole response initially")
-			conn.Close()
-			return buf[:3+length], nil
-		}
-
 		// read rest of message
-		rlen := int(length) - (n - 4)
-		rest := make([]byte, rlen)
-		k.logger.Debug().Int("remainder", rlen).Msg("more data to come")
-		if _, err := io.ReadFull(conn, rest); err != nil {
+		resp := make([]byte, int(length))
+		k.logger.Debug().Uint32("length", length).Msg("reading kerberos response")
+		if _, err := io.ReadFull(conn, resp); err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading remainder of message from kdc, trying next if available")
 			conn.Close()
 			continue
@@ -162,7 +151,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		k.logger.Debug().Msg("got response")
 
 		// return message
-		return append(buf[:3+length], rest...), nil
+		return resp, nil
 	}
 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
