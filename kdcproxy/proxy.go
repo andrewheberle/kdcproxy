@@ -101,57 +101,93 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
-	// do tcp only
-	c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, true)
-	if err != nil || c < 1 {
-		return nil, fmt.Errorf("cannot get kdc for realm %s due to %s", msg.TargetDomain, err)
-	}
-
-	for i := range kdcs {
-		conn, err := net.Dial("tcp", kdcs[i])
-		if err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error connecting, trying next if available")
-			continue
-		}
-		conn.SetDeadline(time.Now().Add(timeout))
-
-		// send message
-		if _, err := conn.Write(msg.KerbMessage); err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
-			conn.Close()
+	// do both udp and tcp with udp first
+	for _, proto := range []string{"udp", "tcp"} {
+		logger := k.logger.With().Str("realm", msg.TargetDomain).Str("proto", proto).Logger()
+		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == "tcp")
+		if err != nil || c < 1 {
+			logger.Warn().Err(err).Msg("cannot get kdc")
 			continue
 		}
 
-		// read inital 4 bytes to get length of response
-		buf := make([]byte, 4)
-		if _, err := io.ReadFull(conn, buf); err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading message length from kdc, trying next if available")
-			conn.Close()
-			continue
+		// try each kdc
+		for _, kdc := range kdcs {
+			// add kdc to logger chain
+			logger := logger.With().Str("kdc", kdc).Logger()
+
+			// connect to kdc
+			conn, err := net.Dial(proto, kdc)
+			if err != nil {
+				logger.Warn().Err(err).Msg("error connecting, trying next if available")
+				continue
+			}
+			conn.SetDeadline(time.Now().Add(timeout))
+
+			// for udp trim off length
+			req := msg.KerbMessage
+			if proto == "udp" {
+				req = msg.KerbMessage[4:]
+			}
+
+			// send message
+			if _, err := conn.Write(req); err != nil {
+				logger.Warn().Err(err).Msg("cannot write packet data, trying next if available")
+				conn.Close()
+				continue
+			}
+
+			// handle udp and tcp responses differently
+			if proto == "udp" {
+				// for udp just read response
+				msg, err := io.ReadAll(conn)
+				if err != nil {
+					k.logger.Warn().Err(err).Msg("error reading response from kdc, trying next if available")
+					conn.Close()
+					continue
+				}
+				conn.Close()
+
+				logger.Debug().Msg("got response")
+
+				// work out length
+				l := make([]byte, 4)
+				binary.BigEndian.PutUint32(l, uint32(len(msg)))
+
+				// return message with length added
+				return append(l, msg...), nil
+			} else {
+				// read inital 4 bytes to get length of response
+				buf := make([]byte, 4)
+				if _, err := io.ReadFull(conn, buf); err != nil {
+					logger.Warn().Err(err).Msg("error reading message length from kdc, trying next if available")
+					conn.Close()
+					continue
+				}
+
+				// work out length of message
+				length, err := klen(buf[:])
+				if err != nil {
+					logger.Warn().Err(err).Msg("error parsing length from kdc, trying next if available")
+					conn.Close()
+					continue
+				}
+
+				// read rest of message
+				msg := make([]byte, int(length))
+				logger.Debug().Uint32("length", length).Msg("reading kerberos response")
+				if _, err := io.ReadFull(conn, msg); err != nil {
+					logger.Warn().Err(err).Msg("error reading response from kdc, trying next if available")
+					conn.Close()
+					continue
+				}
+				conn.Close()
+
+				logger.Debug().Msg("got response")
+
+				// return response (including length)
+				return append(buf, msg...), nil
+			}
 		}
-
-		// work out length of message
-		length, err := klen(buf[:])
-		if err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error parsing length from kdc, trying next if available")
-			conn.Close()
-			continue
-		}
-
-		// read rest of message
-		msg := make([]byte, int(length))
-		k.logger.Debug().Uint32("length", length).Msg("reading kerberos response")
-		if _, err := io.ReadFull(conn, msg); err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading response from kdc, trying next if available")
-			conn.Close()
-			continue
-		}
-		conn.Close()
-
-		k.logger.Debug().Msg("got response")
-
-		// return response (including length)
-		return append(buf, msg...), nil
 	}
 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)

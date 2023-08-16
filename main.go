@@ -21,7 +21,7 @@ import (
 func main() {
 	// command line flags
 	pflag.Bool("debug", false, "Enable debug logging")
-	pflag.String("listen", "127.0.0.1:8080", "Listen address")
+	pflag.String("listen", "127.0.0.1:8080", "Service listen address")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
 	pflag.Parse()
