@@ -139,10 +139,11 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			continue
 		}
 
-		k.logger.Debug().Uint32("length", length).Msg("kerberos response message")
+		k.logger.Debug().Uint32("length", length).Msg("kerberos response")
 
 		// have we got whole message
 		if n-4 == int(length) {
+			k.logger.Debug().Msg("got whole response initially")
 			conn.Close()
 			return buf[4:], nil
 		}
@@ -150,12 +151,15 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		// read rest of message
 		rlen := int(length) - (n - 4)
 		rest := make([]byte, rlen)
+		k.logger.Debug().Int("remainder", rlen).Msg("more data to come")
 		if _, err := io.ReadAtLeast(conn, rest, rlen); err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading remainder of message from kdc, trying next if available")
 			conn.Close()
 			continue
 		}
 		conn.Close()
+
+		k.logger.Debug().Msg("got response")
 
 		// add remainder to buffer
 		buf = append(buf, rest...)
