@@ -215,8 +215,10 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	return nil, fmt.Errorf("message was not valid")
 }
 
-func encode(data []byte) (r []byte, err error) {
-	enc, err := asn1.Marshal(KdcProxyMsg{KerbMessage: data})
+func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
+	msg := KdcProxyMsg{KerbMessage: data}
+	k.logger.Debug().Interface("msg", msg).Msg("KDC_PROXY_MESSAGE reply")
+	enc, err := asn1.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
