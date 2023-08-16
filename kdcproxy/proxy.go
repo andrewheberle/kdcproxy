@@ -145,7 +145,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		if n-4 == int(length) {
 			k.logger.Debug().Msg("got whole response initially")
 			conn.Close()
-			return buf[4:], nil
+			return buf, nil
 		}
 
 		// read rest of message
@@ -165,7 +165,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		buf = append(buf, rest...)
 
 		// return message (minus length)
-		return buf[4:], nil
+		return buf, nil
 	}
 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
