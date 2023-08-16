@@ -65,7 +65,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// decode the message
-	msg, err := decode(data)
+	msg, err := k.decode(data)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("cannot unmarshal")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -136,8 +136,9 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
 }
 
-func decode(data []byte) (msg *KdcProxyMsg, err error) {
+func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 	var m KdcProxyMsg
+
 	rest, err := asn1.Unmarshal(data, &m)
 	if err != nil {
 		return nil, err
@@ -158,6 +159,8 @@ func decode(data []byte) (msg *KdcProxyMsg, err error) {
 		if m.TargetDomain == "" {
 			m.TargetDomain = as.ReqBody.Realm
 		}
+
+		k.logger.Debug().Interface("message", as).Msg("KRB_AS_REQ")
 		return &m, nil
 	}
 
@@ -165,6 +168,8 @@ func decode(data []byte) (msg *KdcProxyMsg, err error) {
 		if m.TargetDomain == "" {
 			m.TargetDomain = tgs.ReqBody.Realm
 		}
+
+		k.logger.Debug().Interface("message", tgs).Msg("KRB_TGS_REQ")
 		return &m, nil
 	}
 
@@ -172,6 +177,8 @@ func decode(data []byte) (msg *KdcProxyMsg, err error) {
 		if m.TargetDomain == "" {
 			m.TargetDomain = ap.Ticket.Realm
 		}
+
+		k.logger.Debug().Interface("message", ap).Msg("KRB_AP_REQ")
 		return &m, nil
 	}
 
@@ -179,6 +186,8 @@ func decode(data []byte) (msg *KdcProxyMsg, err error) {
 		if m.TargetDomain == "" {
 			m.TargetDomain = priv.Ticket.Realm
 		}
+
+		k.logger.Debug().Interface("message", priv).Msg("KRB_PRIV_REQ")
 		return &m, nil
 	}
 
