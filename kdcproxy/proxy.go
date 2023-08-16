@@ -148,13 +148,8 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
-	// ensure message is a valid kerberos message
-	var (
-		as   messages.ASReq
-		ap   messages.APReq
-		priv messages.APReq
-		tgs  messages.TGSReq
-	)
+	// set up types
+	as := messages.ASReq{}
 	if err := as.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = as.ReqBody.Realm
@@ -164,6 +159,7 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return &m, nil
 	}
 
+	tgs := messages.TGSReq{}
 	if err := tgs.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = tgs.ReqBody.Realm
@@ -173,6 +169,7 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return &m, nil
 	}
 
+	ap := messages.APReq{}
 	if err := ap.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = ap.Ticket.Realm
@@ -182,6 +179,7 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return &m, nil
 	}
 
+	priv := messages.APReq{}
 	if err := priv.Unmarshal(msg.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = priv.Ticket.Realm
