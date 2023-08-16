@@ -99,7 +99,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(reply)
 }
 
-func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
+func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 	// do tcp only
 	c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, true)
 	if err != nil || c < 1 {
@@ -114,14 +114,13 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
-		_, err = conn.Write(msg.KerbMessage)
-		if err != nil {
+		if _, err := conn.Write(msg.KerbMessage); err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
 			continue
 		}
 
-		resp, err = io.ReadAll(conn)
+		resp, err := io.ReadAll(conn)
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading from kdc, trying next if available")
 			conn.Close()
