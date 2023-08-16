@@ -149,12 +149,8 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 				logger.Debug().Msg("got response")
 
-				// work out length
-				l := make([]byte, 4)
-				binary.BigEndian.PutUint32(l, uint32(len(msg)))
-
 				// return message with length added
-				return append(l, msg...), nil
+				return append(uint32ToBytes(uint32(len(msg))), msg...), nil
 			} else {
 				// read inital 4 bytes to get length of response
 				buf := make([]byte, 4)
@@ -165,7 +161,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				}
 
 				// work out length of message
-				length, err := klen(buf[:])
+				length, err := bytesToUint32(buf[:])
 				if err != nil {
 					logger.Warn().Err(err).Msg("error parsing length from kdc, trying next if available")
 					conn.Close()
@@ -251,11 +247,19 @@ func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
 }
 
 // Returns the length of a kerberos message based on the leading 4-bytes
-func klen(data []byte) (uint32, error) {
-	if len(data) < 4 {
+func bytesToUint32(b []byte) (uint32, error) {
+	if len(b) < 4 {
 		return 0, fmt.Errorf("invalid length")
 	}
-	n := binary.BigEndian.Uint32(data)
+	n := binary.BigEndian.Uint32(b)
 
 	return n, nil
+}
+
+// Encodes the length of a kerberos message as bytes
+func uint32ToBytes(n uint32) []byte {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, n)
+
+	return b
 }
