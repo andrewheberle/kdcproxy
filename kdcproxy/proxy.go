@@ -89,7 +89,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// encode response
-	reply, err := encode(resp)
+	reply, err := k.encode(resp)
 	if err != nil {
 		k.logger.Error().Err(err).Msg("unable to encode krb5 message")
 		http.Error(w, "encoding error", http.StatusInternalServerError)
