@@ -148,44 +148,36 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
-	// set up types
-	as := messages.ASReq{}
-	if err := as.Unmarshal(m.KerbMessage); err == nil {
+	// check if its an AS_REQ
+	asReq := messages.ASReq{}
+	if err := asReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		if m.TargetDomain == "" {
-			m.TargetDomain = as.ReqBody.Realm
+			m.TargetDomain = asReq.ReqBody.Realm
 		}
 
-		k.logger.Debug().Interface("message", as).Msg("KRB_AS_REQ")
+		k.logger.Debug().Interface("message", asReq).Msg("KRB_AS_REQ")
 		return &m, nil
 	}
 
-	tgs := messages.TGSReq{}
-	if err := tgs.Unmarshal(m.KerbMessage); err == nil {
+	// TGS_REQ
+	tgsReq := messages.TGSReq{}
+	if err := tgsReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		if m.TargetDomain == "" {
-			m.TargetDomain = tgs.ReqBody.Realm
+			m.TargetDomain = tgsReq.ReqBody.Realm
 		}
 
-		k.logger.Debug().Interface("message", tgs).Msg("KRB_TGS_REQ")
+		k.logger.Debug().Interface("message", tgsReq).Msg("KRB_TGS_REQ")
 		return &m, nil
 	}
 
-	ap := messages.APReq{}
-	if err := ap.Unmarshal(m.KerbMessage); err == nil {
+	// AP_REQ
+	apReq := messages.APReq{}
+	if err := apReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		if m.TargetDomain == "" {
-			m.TargetDomain = ap.Ticket.Realm
+			m.TargetDomain = apReq.Ticket.Realm
 		}
 
-		k.logger.Debug().Interface("message", ap).Msg("KRB_AP_REQ")
-		return &m, nil
-	}
-
-	priv := messages.APReq{}
-	if err := priv.Unmarshal(m.KerbMessage); err == nil {
-		if m.TargetDomain == "" {
-			m.TargetDomain = priv.Ticket.Realm
-		}
-
-		k.logger.Debug().Interface("message", priv).Msg("KRB_PRIV_REQ")
+		k.logger.Debug().Interface("message", apReq).Msg("KRB_AP_REQ")
 		return &m, nil
 	}
 
