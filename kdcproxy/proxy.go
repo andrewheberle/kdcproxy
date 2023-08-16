@@ -1,6 +1,7 @@
 package kdcproxy
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -114,21 +115,51 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		}
 		conn.SetDeadline(time.Now().Add(timeout))
 
+		// send message
 		if _, err := conn.Write(msg.KerbMessage); err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("cannot write packet data, trying next if available")
 			conn.Close()
 			continue
 		}
 
-		resp, err := io.ReadAll(conn)
+		// read response
+		buf := make([]byte, 1048576)
+		n, err := io.ReadAtLeast(conn, buf, 4)
 		if err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading from kdc, trying next if available")
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading message length from kdc, trying next if available")
+			conn.Close()
+			continue
+		}
+
+		// work out length of message
+		length, err := klen(buf)
+		if err != nil {
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error parsing length from kdc, trying next if available")
+			conn.Close()
+			continue
+		}
+
+		// have we got whole message
+		if n-4 == int(length) {
+			conn.Close()
+			return buf[4:], nil
+		}
+
+		// read rest of message
+		rlen := int(length) - (n - 4)
+		rest := make([]byte, rlen)
+		if _, err := io.ReadAtLeast(conn, rest, rlen); err != nil {
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading remainder of message from kdc, trying next if available")
 			conn.Close()
 			continue
 		}
 		conn.Close()
 
-		return resp, nil
+		// add remainder to buffer
+		buf = append(buf, rest...)
+
+		// return message (minus length)
+		return buf[4:], nil
 	}
 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
@@ -188,4 +219,13 @@ func encode(krb5data []byte) (r []byte, err error) {
 		return nil, err
 	}
 	return enc, nil
+}
+
+func klen(data []byte) (uint32, error) {
+	if len(data) < 4 {
+		return 0, fmt.Errorf("invalid length")
+	}
+	n := binary.BigEndian.Uint32(data[0:3])
+
+	return n, nil
 }
