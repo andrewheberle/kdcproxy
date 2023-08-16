@@ -9,10 +9,7 @@ import (
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
-	"github.com/jcmturner/gokrb5/v8/iana"
-	"github.com/jcmturner/gokrb5/v8/iana/msgtype"
 	"github.com/jcmturner/gokrb5/v8/messages"
-	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/rs/zerolog"
 )
 
@@ -139,7 +136,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
 }
 
-func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
+func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	var m KdcProxyMsg
 
 	rest, err := asn1.Unmarshal(data, &m)
@@ -151,18 +148,9 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
-	k.logger.Debug().Interface("msg", msg).Send()
-
 	// set up types
-	as := messages.ASReq{
-		messages.KDCReqFields{
-			PVNO:    iana.PVNO,
-			MsgType: msgtype.KRB_AS_REQ,
-			PAData:  types.PADataSequence{},
-			ReqBody: messages.KDCReqBody{},
-		},
-	}
-	if err := as.Unmarshal(msg.KerbMessage); err == nil {
+	as := messages.ASReq{}
+	if err := as.Unmarshal(m.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = as.ReqBody.Realm
 		}
@@ -172,7 +160,7 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 	}
 
 	tgs := messages.TGSReq{}
-	if err := tgs.Unmarshal(msg.KerbMessage); err == nil {
+	if err := tgs.Unmarshal(m.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = tgs.ReqBody.Realm
 		}
@@ -182,7 +170,7 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 	}
 
 	ap := messages.APReq{}
-	if err := ap.Unmarshal(msg.KerbMessage); err == nil {
+	if err := ap.Unmarshal(m.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = ap.Ticket.Realm
 		}
@@ -192,7 +180,7 @@ func (k *KerberosProxy) decode(data []byte) (msg *KdcProxyMsg, err error) {
 	}
 
 	priv := messages.APReq{}
-	if err := priv.Unmarshal(msg.KerbMessage); err == nil {
+	if err := priv.Unmarshal(m.KerbMessage); err == nil {
 		if m.TargetDomain == "" {
 			m.TargetDomain = priv.Ticket.Realm
 		}
