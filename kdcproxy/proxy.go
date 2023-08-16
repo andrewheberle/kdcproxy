@@ -28,15 +28,20 @@ type KdcProxyMsg struct {
 type KerberosProxy struct {
 	krb5Config *krb5config.Config
 	logger     zerolog.Logger
+	protocols  []string
 }
 
-func InitKdcProxy(logger zerolog.Logger) *KerberosProxy {
+func InitKdcProxy(logger zerolog.Logger, tcpOnly bool) *KerberosProxy {
 	cfg := krb5config.New()
 	cfg.LibDefaults.DNSLookupKDC = true
 
 	logger.Debug().Interface("cfg", cfg).Send()
 
-	return &KerberosProxy{cfg, logger}
+	if tcpOnly {
+		return &KerberosProxy{cfg, logger, []string{"tcp"}}
+	}
+
+	return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}
 }
 
 func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
@@ -101,8 +106,8 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
-	// do both udp and tcp with udp first
-	for _, proto := range []string{"udp", "tcp"} {
+	// do tcp only at the moment first
+	for _, proto := range k.protocols {
 		logger := k.logger.With().Str("realm", msg.TargetDomain).Str("proto", proto).Logger()
 		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == "tcp")
 		if err != nil || c < 1 {

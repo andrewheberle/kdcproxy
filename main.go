@@ -60,7 +60,7 @@ func main() {
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
-	k := kdcproxy.InitKdcProxy(logger)
+	k := kdcproxy.InitKdcProxy(logger, true)
 
 	// add to http service
 	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))
