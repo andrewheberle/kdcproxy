@@ -131,7 +131,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		}
 
 		// work out length of message
-		length, err := klen(buf)
+		length, err := klen(buf[:])
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error parsing length from kdc, trying next if available")
 			conn.Close()
@@ -139,10 +139,10 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		}
 
 		// read rest of message
-		resp := make([]byte, int(length))
+		msg := make([]byte, int(length))
 		k.logger.Debug().Uint32("length", length).Msg("reading kerberos response")
-		if _, err := io.ReadFull(conn, resp); err != nil {
-			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading remainder of message from kdc, trying next if available")
+		if _, err := io.ReadFull(conn, msg); err != nil {
+			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading response from kdc, trying next if available")
 			conn.Close()
 			continue
 		}
@@ -150,8 +150,8 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 		k.logger.Debug().Msg("got response")
 
-		// return message
-		return resp, nil
+		// return response (including length)
+		return append(buf, msg...), nil
 	}
 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
