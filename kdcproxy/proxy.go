@@ -16,7 +16,7 @@ import (
 
 const (
 	maxLength = 128 * 1024
-	timeout   = 5 * time.Second
+	timeout   = 2 * time.Second
 )
 
 type KdcProxyMsg struct {
