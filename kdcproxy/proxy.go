@@ -154,9 +154,9 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 			req := msg.KerbMessage
 			// for udp trim off length
-			/* if proto == "udp" {
+			if proto == "udp" {
 				req = msg.KerbMessage[4:]
-			} */
+			}
 
 			// send message
 			n, err := conn.Write(req)

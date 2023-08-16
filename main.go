@@ -82,7 +82,11 @@ func main() {
 	// start server
 	if viper.GetString("cert") != "" && viper.GetString("key") != "" {
 		// logging about command line
-		logger.Info().Str("cert", viper.GetString("cert")).Str("key", viper.GetString("key")).Msg("setting up tls server")
+		logger.Info().
+			Bool("debug", viper.GetBool("debug")).
+			Str("cert", viper.GetString("cert")).
+			Str("key", viper.GetString("key")).
+			Msg("setting up tls server")
 
 		certctx, certcancel := context.WithCancel(context.Background())
 
@@ -111,7 +115,9 @@ func main() {
 
 	} else {
 		// logging about command line
-		logger.Info().Msg("setting up server")
+		logger.Info().
+			Bool("debug", viper.GetBool("debug")).
+			Msg("setting up server")
 
 		// add non-TLS enabled server
 		g.Add(func() error {
