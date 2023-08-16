@@ -19,22 +19,26 @@ const (
 	timeout   = 2 * time.Second
 )
 
+// KdcProxyMsg represents a KDC_PROXY_MESSAGE as per https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-kkdcp/5778aff5-b182-4b97-a970-29c7f911eef2
 type KdcProxyMsg struct {
 	KerbMessage   []byte `asn1:"tag:0,explicit"`
 	TargetDomain  string `asn1:"tag:1,optional,generalstring"`
 	DcLocatorHint int    `asn1:"tag:2,optional"`
 }
 
+// KerberosProxy is a KDC Proxy
 type KerberosProxy struct {
 	krb5Config *krb5config.Config
 	logger     zerolog.Logger
 	protocols  []string
 }
 
+// InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
 func InitKdcProxy(logger zerolog.Logger) (*KerberosProxy, error) {
 	return initproxy(logger, "")
 }
 
+// InitKdcProxyWithConfig creates a KerberosProxy based on the configured "krb5.conf" file
 func InitKdcProxyWithConfig(logger zerolog.Logger, config string) (*KerberosProxy, error) {
 	return initproxy(logger, config)
 }
@@ -57,6 +61,7 @@ func initproxy(logger zerolog.Logger, config string) (*KerberosProxy, error) {
 	return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}, nil
 }
 
+// Handler implements a KDC Proxy endpoint over HTTP
 func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
