@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/andrewheberle/kdcproxy"
+	"github.com/andrewheberle/kdcproxy/proxy"
 	"github.com/cloudflare/certinel/fswatcher"
 	"github.com/justinas/alice"
 	"github.com/oklog/run"
@@ -61,7 +61,7 @@ func main() {
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
-	k, err := kdcproxy.InitKdcProxyWithConfig(logger, viper.GetString("krb5conf"))
+	k, err := proxy.InitKdcProxyWithConfig(logger, viper.GetString("krb5conf"))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("could not set up kdc proxy")
 	}

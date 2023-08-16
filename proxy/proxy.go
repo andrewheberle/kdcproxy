@@ -1,4 +1,4 @@
-package kdcproxy
+package proxy
 
 import (
 	"encoding/binary"
