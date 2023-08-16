@@ -135,7 +135,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 }
 
 func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
-	var m *KdcProxyMsg
+	var m KdcProxyMsg
 
 	// unamrshal KDC-PROXY-MESSAGE
 	rest, err := asn1.Unmarshal(data, &m)
