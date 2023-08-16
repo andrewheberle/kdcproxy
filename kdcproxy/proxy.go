@@ -121,7 +121,6 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 			continue
 		}
 
-		// todo check header
 		resp, err = io.ReadAll(conn)
 		if err != nil {
 			k.logger.Warn().Err(err).Str("kdc", kdcs[i]).Msg("error reading from kdc, trying next if available")
@@ -137,32 +136,45 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) (resp []byte, err error) {
 }
 
 func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
+	var m *KdcProxyMsg
+
+	// unamrshal KDC-PROXY-MESSAGE
+	rest, err := asn1.Unmarshal(data, &m)
+	if err != nil {
+		return nil, err
+	}
+
+	// make sure no tailing data exists
+	if len(rest) > 0 {
+		return nil, fmt.Errorf("trailing data in request")
+	}
+
 	// AS_REQ
 	asReq := messages.ASReq{}
-	if err := asReq.Unmarshal(data[4:]); err == nil {
+	if err := asReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		k.logger.Debug().Interface("message", asReq).Msg("KRB_AS_REQ")
 		return &KdcProxyMsg{
-			KerbMessage:  data[4:],
+			KerbMessage:  m.KerbMessage[4:],
 			TargetDomain: asReq.ReqBody.Realm,
 		}, nil
 	}
 
 	// TGS_REQ
 	tgsReq := messages.TGSReq{}
-	if err := tgsReq.Unmarshal(data[4:]); err == nil {
+	if err := tgsReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		k.logger.Debug().Interface("message", tgsReq).Msg("KRB_TGS_REQ")
 		return &KdcProxyMsg{
-			KerbMessage:  data[4:],
+			KerbMessage:  m.KerbMessage[4:],
 			TargetDomain: tgsReq.ReqBody.Realm,
 		}, nil
 	}
 
 	// AP_REQ
 	apReq := messages.APReq{}
-	if err := apReq.Unmarshal(data[4:]); err == nil {
+	if err := apReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		k.logger.Debug().Interface("message", apReq).Msg("KRB_AP_REQ")
 		return &KdcProxyMsg{
-			KerbMessage:  data[4:],
+			KerbMessage:  m.KerbMessage[4:],
 			TargetDomain: apReq.Ticket.Realm,
 		}, nil
 	}
