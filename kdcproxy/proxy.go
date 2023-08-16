@@ -189,7 +189,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				// return message with length added
 				return append(uint32ToBytes(uint32(len(msg))), msg...), nil
 			} else {
-				// read inital 4 bytes to get length of response
+				// read initial 4 bytes to get length of response
 				buf := make([]byte, 4)
 				if _, err := io.ReadFull(conn, buf); err != nil {
 					logger.Warn().Err(err).Msg("error reading message length from kdc, trying next if available")

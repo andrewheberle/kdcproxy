@@ -1,5 +1,10 @@
 # go-kdcproxy
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/andrewheberle/go-kdcproxy?style=flat)](https://goreportcard.com/report/github.com/andrewheberle/go-kdcproxy)
+[![Godoc](https://img.shields.io/badge/go-documentation-blue.svg?style=flat)](https://godoc.org/github.com/andrewheberle/go-kdcproxy)
+[![tag](https://img.shields.io/github/v/tag/andrewheberle/go-kdcproxy)](https://github.com/andrewheberle/go-kdcproxy/-/tags)
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue)](https://github.com/andrewheberle/go-kdcproxy/-/blob/main/LICENSE)
+
 This is a Go based KDC Proxy designed for use against Active Directory.
 
 # Usage
@@ -13,7 +18,7 @@ This is a Go based KDC Proxy designed for use against Active Directory.
 ## Docker
 
 ```sh
-docker run -p 8080:8080 ghcr.io/andrewheberle/go-kdcproxy
+docker run -p 8080:8080 ghcr.io/andrewheberle/go-kdcproxy:v1.1.0
 ```
 
 To run via HTTPS:
