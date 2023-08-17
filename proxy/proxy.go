@@ -11,7 +11,7 @@ import (
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/messages"
-	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 )
 
 const (
@@ -29,27 +29,26 @@ type KdcProxyMsg struct {
 // KerberosProxy is a KDC Proxy
 type KerberosProxy struct {
 	krb5Config *krb5config.Config
-	logger     zerolog.Logger
 	protocols  []string
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
-func InitKdcProxy(logger zerolog.Logger) (*KerberosProxy, error) {
-	return initproxy(logger, "")
+func InitKdcProxy() (*KerberosProxy, error) {
+	return initproxy("")
 }
 
 // InitKdcProxyWithConfig creates a KerberosProxy based on the configured "krb5.conf" file
-func InitKdcProxyWithConfig(logger zerolog.Logger, config string) (*KerberosProxy, error) {
-	return initproxy(logger, config)
+func InitKdcProxyWithConfig(config string) (*KerberosProxy, error) {
+	return initproxy(config)
 }
 
-func initproxy(logger zerolog.Logger, config string) (*KerberosProxy, error) {
+func initproxy(config string) (*KerberosProxy, error) {
 	// with no config rely on DNS to find KDC
 	if config == "" {
 		cfg := krb5config.New()
 		cfg.LibDefaults.DNSLookupKDC = true
 
-		return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}, nil
+		return &KerberosProxy{cfg, []string{"udp", "tcp"}}, nil
 	}
 
 	// load config from file
@@ -58,7 +57,7 @@ func initproxy(logger zerolog.Logger, config string) (*KerberosProxy, error) {
 		return nil, err
 	}
 
-	return &KerberosProxy{cfg, logger, []string{"udp", "tcp"}}, nil
+	return &KerberosProxy{cfg, []string{"udp", "tcp"}}, nil
 }
 
 // Handler implements a KDC Proxy endpoint over HTTP
@@ -82,7 +81,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// read data from request body
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		k.logger.Error().Err(err).Msg("error reading from stream")
+		hlog.FromRequest(r).Error().Err(err).Msg("error reading from stream")
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
@@ -91,14 +90,14 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// decode the message
 	msg, err := k.decode(data)
 	if err != nil {
-		k.logger.Error().Err(err).Msg("cannot unmarshal")
+		hlog.FromRequest(r).Error().Err(err).Msg("cannot unmarshal")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
 	// fail if no realm is specified
 	if msg.TargetDomain == "" {
-		k.logger.Error().Msg("target-domain must not be empty")
+		hlog.FromRequest(r).Error().Msg("target-domain must not be empty")
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -106,7 +105,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// forward to kdc(s)
 	resp, err := k.forward(msg)
 	if err != nil {
-		k.logger.Error().Err(err).Msg("cannot forward to kdc")
+		hlog.FromRequest(r).Error().Err(err).Msg("cannot forward to kdc")
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -114,7 +113,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// encode response
 	reply, err := k.encode(resp)
 	if err != nil {
-		k.logger.Error().Err(err).Msg("unable to encode krb5 message")
+		hlog.FromRequest(r).Error().Err(err).Msg("unable to encode krb5 message")
 		http.Error(w, "encoding error", http.StatusInternalServerError)
 	}
 
@@ -124,9 +123,6 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
-	// some debugging
-	k.logger.Debug().Interface("msg", msg).Msg("KDC_PROXY_MESSAGE request")
-
 	// if message is too large only use TCP
 	protocols := k.protocols
 	if len(msg.KerbMessage)-4 > k.krb5Config.LibDefaults.UDPPreferenceLimit {
@@ -135,24 +131,17 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 	// try protocol options
 	for _, proto := range protocols {
-		logger := k.logger.With().Str("realm", msg.TargetDomain).Str("protocol", proto).Logger()
-
 		// get kdcs
 		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == "tcp")
 		if err != nil || c < 1 {
-			logger.Warn().Err(err).Msg("cannot get kdc")
 			continue
 		}
 
 		// try each kdc
 		for _, kdc := range kdcs {
-			// add kdc to logger chain
-			logger := logger.With().Str("kdc", kdc).Logger()
-
 			// connect to kdc
 			conn, err := net.Dial(proto, kdc)
 			if err != nil {
-				logger.Warn().Err(err).Msg("error connecting, trying next if available")
 				continue
 			}
 			conn.SetDeadline(time.Now().Add(timeout))
@@ -166,14 +155,12 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			// send message
 			n, err := conn.Write(req)
 			if err != nil {
-				logger.Warn().Err(err).Msg("cannot write packet data, trying next if available")
 				conn.Close()
 				continue
 			}
 
 			// check that all the data was sent
 			if n != len(req) {
-				logger.Warn().Int("expected", len(req)).Int("actual", n).Msg("did not write all data")
 				conn.Close()
 				continue
 			}
@@ -183,13 +170,10 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				// for udp just read response
 				msg, err := io.ReadAll(conn)
 				if err != nil {
-					k.logger.Warn().Err(err).Msg("error reading response from kdc, trying next if available")
 					conn.Close()
 					continue
 				}
 				conn.Close()
-
-				logger.Debug().Msg("got response")
 
 				// return message with length added
 				return append(uint32ToBytes(uint32(len(msg))), msg...), nil
@@ -197,7 +181,6 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				// read initial 4 bytes to get length of response
 				buf := make([]byte, 4)
 				if _, err := io.ReadFull(conn, buf); err != nil {
-					logger.Warn().Err(err).Msg("error reading message length from kdc, trying next if available")
 					conn.Close()
 					continue
 				}
@@ -205,22 +188,17 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				// work out length of message
 				length, err := bytesToUint32(buf[:])
 				if err != nil {
-					logger.Warn().Err(err).Msg("error parsing length from kdc, trying next if available")
 					conn.Close()
 					continue
 				}
 
 				// read rest of message
 				msg := make([]byte, int(length))
-				logger.Debug().Uint32("length", length).Msg("reading kerberos response")
 				if _, err := io.ReadFull(conn, msg); err != nil {
-					logger.Warn().Err(err).Msg("error reading response from kdc, trying next if available")
 					conn.Close()
 					continue
 				}
 				conn.Close()
-
-				logger.Debug().Msg("got response")
 
 				// return response (including length)
 				return append(buf, msg...), nil
@@ -248,7 +226,6 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	// AS_REQ
 	asReq := messages.ASReq{}
 	if err := asReq.Unmarshal(m.KerbMessage[4:]); err == nil {
-		k.logger.Debug().Interface("message", asReq).Msg("KRB_AS_REQ")
 		return &KdcProxyMsg{
 			KerbMessage:  m.KerbMessage,
 			TargetDomain: asReq.ReqBody.Realm,
@@ -258,7 +235,6 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	// TGS_REQ
 	tgsReq := messages.TGSReq{}
 	if err := tgsReq.Unmarshal(m.KerbMessage[4:]); err == nil {
-		k.logger.Debug().Interface("message", tgsReq).Msg("KRB_TGS_REQ")
 		return &KdcProxyMsg{
 			KerbMessage:  m.KerbMessage,
 			TargetDomain: tgsReq.ReqBody.Realm,
@@ -268,7 +244,6 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	// AP_REQ
 	apReq := messages.APReq{}
 	if err := apReq.Unmarshal(m.KerbMessage[4:]); err == nil {
-		k.logger.Debug().Interface("message", apReq).Msg("KRB_AP_REQ")
 		return &KdcProxyMsg{
 			KerbMessage:  m.KerbMessage,
 			TargetDomain: apReq.Ticket.Realm,
@@ -278,9 +253,9 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	return nil, fmt.Errorf("message was not valid")
 }
 
+// Encodes the provide bytes as a KDC-PROXY-MESSAGE
 func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
 	msg := KdcProxyMsg{KerbMessage: data}
-	k.logger.Debug().Interface("msg", msg).Msg("KDC_PROXY_MESSAGE reply")
 	enc, err := asn1.Marshal(msg)
 	if err != nil {
 		return nil, err
