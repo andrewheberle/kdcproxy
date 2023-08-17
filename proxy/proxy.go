@@ -16,6 +16,8 @@ import (
 const (
 	maxLength = 128 * 1024
 	timeout   = 2 * time.Second
+	protoUdp  = "udp"
+	protoTcp  = "tcp"
 )
 
 // KdcProxyMsg represents a KDC_PROXY_MESSAGE as per https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-kkdcp/5778aff5-b182-4b97-a970-29c7f911eef2
@@ -28,7 +30,6 @@ type KdcProxyMsg struct {
 // KerberosProxy is a KDC Proxy
 type KerberosProxy struct {
 	krb5Config *krb5config.Config
-	protocols  []string
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
@@ -47,7 +48,7 @@ func initproxy(config string) (*KerberosProxy, error) {
 		cfg := krb5config.New()
 		cfg.LibDefaults.DNSLookupKDC = true
 
-		return &KerberosProxy{cfg, []string{"udp", "tcp"}}, nil
+		return &KerberosProxy{cfg}, nil
 	}
 
 	// load config from file
@@ -56,7 +57,7 @@ func initproxy(config string) (*KerberosProxy, error) {
 		return nil, err
 	}
 
-	return &KerberosProxy{cfg, []string{"udp", "tcp"}}, nil
+	return &KerberosProxy{cfg}, nil
 }
 
 // Handler implements a KDC Proxy endpoint over HTTP
@@ -141,16 +142,17 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
+	// use both udp and tcp
+	protocols := []string{protoUdp, protoTcp}
 	// if message is too large only use TCP
-	protocols := k.protocols
 	if len(msg.KerbMessage)-4 > k.krb5Config.LibDefaults.UDPPreferenceLimit {
-		protocols = []string{"tcp"}
+		protocols = []string{protoTcp}
 	}
 
 	// try protocol options
 	for _, proto := range protocols {
 		// get kdcs
-		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == "tcp")
+		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == protoTcp)
 		if err != nil || c < 1 {
 			continue
 		}
@@ -158,7 +160,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		// try each kdc
 		for _, kdc := range kdcs {
 			// metrics
-			if proto == "tcp" {
+			if proto == protoTcp {
 				kerbReqTcp.Inc()
 			} else {
 				kerbReqUdp.Inc()
@@ -173,7 +175,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 			req := msg.KerbMessage
 			// for udp trim off length
-			if proto == "udp" {
+			if proto == protoUdp {
 				req = msg.KerbMessage[4:]
 			}
 
@@ -191,7 +193,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			}
 
 			// handle udp and tcp responses differently
-			if proto == "udp" {
+			if proto == protoUdp {
 				// for udp just read response
 				msg, err := io.ReadAll(conn)
 				if err != nil {
