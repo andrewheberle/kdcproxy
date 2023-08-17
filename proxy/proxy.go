@@ -11,7 +11,6 @@ import (
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/messages"
-	"github.com/rs/zerolog/hlog"
 )
 
 const (
@@ -62,22 +61,21 @@ func initproxy(config string) (*KerberosProxy, error) {
 
 // Handler implements a KDC Proxy endpoint over HTTP
 func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	// we only handle POST's
+	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		hlog.FromRequest(r).Warn().Msg("Method not allowed")
 		return
 	}
 
+	// check content length is valid
 	length := r.ContentLength
 	if length == -1 {
 		http.Error(w, "Content length required", http.StatusLengthRequired)
-		hlog.FromRequest(r).Warn().Msg("Content length required")
 		return
 	}
 
 	if length > maxLength {
 		http.Error(w, "Request entity too large", http.StatusRequestEntityTooLarge)
-		hlog.FromRequest(r).Warn().Msg("Request entity too large")
 		return
 	}
 
@@ -85,7 +83,6 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
-		hlog.FromRequest(r).Error().Err(err).Msg("Error reading from stream")
 		return
 	}
 	defer r.Body.Close()
@@ -94,14 +91,12 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	msg, err := k.decode(data)
 	if err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
-		hlog.FromRequest(r).Error().Err(err).Msg("Cannot decode KDC-PROXY-MESSAGE")
 		return
 	}
 
 	// fail if no realm is specified
 	if msg.TargetDomain == "" {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
-		hlog.FromRequest(r).Error().Msg("KDC-PROXY-MESSAGE.target-domain must not be empty")
 		return
 	}
 
@@ -109,7 +104,6 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	resp, err := k.forward(msg)
 	if err != nil {
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-		hlog.FromRequest(r).Error().Err(err).Msg("Could not forward to kdc")
 		return
 	}
 
@@ -117,15 +111,11 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	reply, err := k.encode(resp)
 	if err != nil {
 		http.Error(w, "encoding error", http.StatusInternalServerError)
-		hlog.FromRequest(r).Error().Err(err).Msg("Unable to encode KDC-PROXY-MESSAGE")
 	}
 
 	// send back to client
 	w.Header().Set("Content-Type", "application/kerberos")
 	w.Write(reply)
-
-	// log request
-	hlog.FromRequest(r).Info().Send()
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {

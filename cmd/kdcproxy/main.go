@@ -48,13 +48,13 @@ func main() {
 	c = c.Append(hlog.NewHandler(logger))
 	c = c.Append(hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
 		hlog.FromRequest(r).Info().
-			Str("method", r.Method).
-			Stringer("url", r.URL).
 			Int("status", status).
 			Int("size", size).
 			Dur("duration", duration).
 			Send()
 	}))
+	c = c.Append(hlog.URLHandler("url"))
+	c = c.Append(hlog.MethodHandler("method"))
 	c = c.Append(hlog.RemoteAddrHandler("ip"))
 	c = c.Append(hlog.UserAgentHandler("user_agent"))
 	c = c.Append(hlog.RefererHandler("referer"))
