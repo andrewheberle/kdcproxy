@@ -192,50 +192,14 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				continue
 			}
 
-			// handle udp and tcp responses differently
-			if proto == protoUdp {
-				// for udp just read response
-				msg, err := io.ReadAll(conn)
-				if err != nil {
-					conn.Close()
-					continue
-				}
-				conn.Close()
-
-				// metrics
-				kerbResUdp.Inc()
-
-				// return message with length added
-				return append(uint32ToBytes(uint32(len(msg))), msg...), nil
-			} else {
-				// read initial 4 bytes to get length of response
-				buf := make([]byte, 4)
-				if _, err := io.ReadFull(conn, buf); err != nil {
-					conn.Close()
-					continue
-				}
-
-				// work out length of message
-				length, err := bytesToUint32(buf[:])
-				if err != nil {
-					conn.Close()
-					continue
-				}
-
-				// read rest of message
-				msg := make([]byte, int(length))
-				if _, err := io.ReadFull(conn, msg); err != nil {
-					conn.Close()
-					continue
-				}
-				conn.Close()
-
-				// metrics
-				kerbResTcp.Inc()
-
-				// return response (including length)
-				return append(buf, msg...), nil
+			// get Kerberos response
+			resp, err := getresponse(conn)
+			if err != nil {
+				// for an error try next kdc
+				continue
 			}
+
+			return resp, nil
 		}
 	}
 
@@ -256,7 +220,7 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
-	// AS_REQ
+	// is it a AS_REQ
 	asReq := messages.ASReq{}
 	if err := asReq.Unmarshal(m.KerbMessage[4:]); err == nil {
 		return &KdcProxyMsg{
@@ -286,7 +250,51 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 	return nil, fmt.Errorf("message was not valid")
 }
 
-// Encodes the provide bytes as a KDC-PROXY-MESSAGE
+func getresponse(conn net.Conn) ([]byte, error) {
+	// close connection once done
+	defer conn.Close()
+
+	// handle udp and tcp responses differently
+	if conn.LocalAddr().Network() == protoUdp {
+		// for udp just read response
+		msg, err := io.ReadAll(conn)
+		if err != nil {
+			return nil, err
+		}
+
+		// metrics
+		kerbResUdp.Inc()
+
+		// return message with length added
+		return append(MarshalKerbLength(len(msg)), msg...), nil
+	}
+
+	// read initial 4 bytes to get length of response
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, err
+	}
+
+	// work out length of message
+	length, err := UnmarshalKerbLength(buf[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// read rest of message
+	msg := make([]byte, length)
+	if _, err := io.ReadFull(conn, msg); err != nil {
+		return nil, err
+	}
+
+	// metrics
+	kerbResTcp.Inc()
+
+	// return response (including length)
+	return append(buf, msg...), nil
+}
+
+// Encodes the provided bytes as a KDC-PROXY-MESSAGE
 func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
 	msg := KdcProxyMsg{KerbMessage: data}
 	enc, err := asn1.Marshal(msg)
@@ -296,20 +304,20 @@ func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
 	return enc, nil
 }
 
-// Returns the length of a kerberos message based on the leading 4-bytes
-func bytesToUint32(b []byte) (uint32, error) {
+// UnmarshalKerbLength returns the length of a kerberos message based on the leading 4-bytes
+func UnmarshalKerbLength(b []byte) (int, error) {
 	if len(b) < 4 {
 		return 0, fmt.Errorf("invalid length")
 	}
 	n := binary.BigEndian.Uint32(b)
 
-	return n, nil
+	return int(n), nil
 }
 
-// Encodes the length of a kerberos message as bytes
-func uint32ToBytes(n uint32) []byte {
+// MarshalKerbLength encodes the length of a kerberos message as bytes
+func MarshalKerbLength(n int) []byte {
 	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, n)
+	binary.BigEndian.PutUint32(b, uint32(n))
 
 	return b
 }
