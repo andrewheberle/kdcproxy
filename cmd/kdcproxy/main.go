@@ -64,6 +64,7 @@ func main() {
 
 	// add to http service
 	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))
+	http.Handle("/metrics", k.Metrics())
 
 	// set up server
 	srv := http.Server{

@@ -61,8 +61,20 @@ func initproxy(config string) (*KerberosProxy, error) {
 
 // Handler implements a KDC Proxy endpoint over HTTP
 func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
+	// metrics
+	httpReqs.Inc()
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		httpRespTimeHistogram.Observe(duration.Seconds())
+	}()
+
+	// ensure content type is always "application/kerberos"
+	w.Header().Set("Content-Type", "application/kerberos")
+
 	// we only handle POST's
 	if r.Method != http.MethodPost {
+		httpRespMethodNotAllowed.Inc()
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -70,11 +82,13 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// check content length is valid
 	length := r.ContentLength
 	if length == -1 {
+		httpRespLengthRequired.Inc()
 		http.Error(w, "Content length required", http.StatusLengthRequired)
 		return
 	}
 
 	if length > maxLength {
+		httpRespRequestEntityTooLarge.Inc()
 		http.Error(w, "Request entity too large", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -82,6 +96,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// read data from request body
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
+		httpRespInternalServerError.Inc()
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
@@ -90,12 +105,14 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// decode the message
 	msg, err := k.decode(data)
 	if err != nil {
+		httpRespBadRequest.Inc()
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
 	// fail if no realm is specified
 	if msg.TargetDomain == "" {
+		httpRespBadRequest.Inc()
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -103,6 +120,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// forward to kdc(s)
 	resp, err := k.forward(msg)
 	if err != nil {
+		httpRespServiceUnavailable.Inc()
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -110,11 +128,15 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// encode response
 	reply, err := k.encode(resp)
 	if err != nil {
+		httpRespInternalServerError.Inc()
 		http.Error(w, "encoding error", http.StatusInternalServerError)
+		return
 	}
 
+	// metrics
+	httpRespOK.Inc()
+
 	// send back to client
-	w.Header().Set("Content-Type", "application/kerberos")
 	w.Write(reply)
 }
 
@@ -135,6 +157,13 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 
 		// try each kdc
 		for _, kdc := range kdcs {
+			// metrics
+			if proto == "tcp" {
+				kerbReqTcp.Inc()
+			} else {
+				kerbReqUdp.Inc()
+			}
+
 			// connect to kdc
 			conn, err := net.Dial(proto, kdc)
 			if err != nil {
@@ -171,6 +200,9 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 				}
 				conn.Close()
 
+				// metrics
+				kerbResUdp.Inc()
+
 				// return message with length added
 				return append(uint32ToBytes(uint32(len(msg))), msg...), nil
 			} else {
@@ -195,6 +227,9 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 					continue
 				}
 				conn.Close()
+
+				// metrics
+				kerbResTcp.Inc()
 
 				// return response (including length)
 				return append(buf, msg...), nil
