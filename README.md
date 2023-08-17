@@ -36,7 +36,6 @@ docker run -p 8443:8080 \
 
 The application supports the following options:
 
-
 | Command Line Option | Environment Variable | Default | Usage |
 |-|-|-|-|
 | --listen | KDC_PROXY_LISTEN | 127.0.0.1:8080[^1] | Service listen address |
@@ -45,6 +44,12 @@ The application supports the following options:
 | --krb5conf | KDC_PROXY_KRB5CONF | | Path to krb5.conf (optional) |
 
 [^1]: The default for the container is ":8080"
+
+## Krb5.conf
+
+It is optional to provide a MIT krb5.conf configuration file. Without this, the service defaults to using DNS to look up the KDC's for the realm to send requests.
+
+In most cases, assuming DNS resolution is working and the required DNS SRV records are in place, this should not be required.
 
 # Specifications
 
