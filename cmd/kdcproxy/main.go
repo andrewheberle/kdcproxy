@@ -20,7 +20,6 @@ import (
 
 func main() {
 	// command line flags
-	pflag.Bool("debug", false, "Enable debug logging")
 	pflag.String("listen", "127.0.0.1:8080", "Service listen address")
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
@@ -35,9 +34,6 @@ func main() {
 	// logging
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	if viper.GetBool("debug") {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	}
 	logwriter := diode.NewWriter(os.Stdout, 1000, 0, func(missed int) {
 		fmt.Printf("Dropped %d messages\n", missed)
 	})
@@ -83,7 +79,6 @@ func main() {
 	if viper.GetString("cert") != "" && viper.GetString("key") != "" {
 		// logging about command line
 		logger.Info().
-			Bool("debug", viper.GetBool("debug")).
 			Str("cert", viper.GetString("cert")).
 			Str("key", viper.GetString("key")).
 			Msg("setting up tls server")
@@ -116,7 +111,6 @@ func main() {
 	} else {
 		// logging about command line
 		logger.Info().
-			Bool("debug", viper.GetBool("debug")).
 			Msg("setting up server")
 
 		// add non-TLS enabled server
