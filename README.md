@@ -42,7 +42,6 @@ The application supports the following options:
 | --listen | KDC_PROXY_LISTEN | 127.0.0.1:8080[^1] | Service listen address |
 | --cert | KDC_PROXY_CERT | | TLS Certificate (optional) |
 | --key | KDC_PROXY_KEY | | TLS KEY (optional) |
-| --debug | KDC_PROXY_DEBUG | false | Enable debug logging |
 | --krb5conf | KDC_PROXY_KRB5CONF | | Path to krb5.conf (optional) |
 
 [^1]: The default for the container is ":8080"
