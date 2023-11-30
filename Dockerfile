@@ -1,11 +1,11 @@
-FROM golang:1.20-bullseye@sha256:d6e78e2618d6070f54c185bcf166500633888c01c4c96adf5e8188bca6303107 AS builder
+FROM golang:1.21@sha256:9baee0edab4139ae9b108fffabb8e2e98a67f0b259fd25283c2a084bd74fea0d AS builder
 
 COPY . /build
 
 RUN cd /build && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -tags netgo -ldflags '-w' ./cmd/kdcproxy
 
-FROM gcr.io/distroless/base-debian11:latest@sha256:73deaaf6a207c1a33850257ba74e0f196bc418636cada9943a03d7abea980d6d
+FROM gcr.io/distroless/base-debian12:nonroot@sha256:5a779e9c2635dbea68ae7988f398f95686ccde186cd2abf51207e41ed2ec51f4
 
 COPY --from=builder /build/kdcproxy /app/kdcproxy
 

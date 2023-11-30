@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/andrewheberle/kdcproxy/proxy"
+	"github.com/andrewheberle/kdcproxy/pkg/proxy"
 	"github.com/cloudflare/certinel/fswatcher"
 	"github.com/justinas/alice"
 	"github.com/oklog/run"
