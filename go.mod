@@ -3,7 +3,7 @@ module github.com/andrewheberle/kdcproxy
 go 1.20
 
 require (
-	github.com/cloudflare/certinel v0.4.0
+	github.com/cloudflare/certinel v0.4.1
 	github.com/jcmturner/gofork v1.7.6
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/justinas/alice v1.2.0
