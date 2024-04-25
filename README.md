@@ -19,7 +19,7 @@ go install github.com/andrewheberle/kdcproxy/cmd/kdcproxy@v1.2.7
 ## Docker
 
 ```sh
-docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.2.1
+docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.2.7
 ```
 
 To run via HTTPS:
