@@ -5,7 +5,7 @@ COPY . /build
 RUN cd /build && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -tags netgo -ldflags '-w' ./cmd/kdcproxy
 
-FROM gcr.io/distroless/base-debian12:nonroot@sha256:4f20cde3246b0192549d6547a0e4cb6dbb84df7e0fa1cfaabbe9be75f532d5c7
+FROM gcr.io/distroless/base-debian12:nonroot@sha256:1c99fceaba16f833d6eb030c07d6304bce68f18350e1a0c69a85b8781afc00d9
 
 COPY --from=builder /build/kdcproxy /app/kdcproxy
 
