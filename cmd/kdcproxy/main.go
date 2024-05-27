@@ -24,6 +24,7 @@ func main() {
 	pflag.String("cert", "", "TLS certificate")
 	pflag.String("key", "", "TLS key")
 	pflag.String("krb5conf", "", "Path to krb5.conf")
+	pflag.Int("rate", proxy.DefaultRateLimit, "Requests per second to the KDC allowed")
 	pflag.Parse()
 
 	// viper setup
@@ -57,7 +58,7 @@ func main() {
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
-	k, err := proxy.InitKdcProxyWithConfig(viper.GetString("krb5conf"))
+	k, err := proxy.InitKdcProxyWithConfigAndLimit(viper.GetString("krb5conf"), viper.GetInt("rate"))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("could not set up kdc proxy")
 	}

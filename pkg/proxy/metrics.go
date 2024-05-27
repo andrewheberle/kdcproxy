@@ -34,6 +34,10 @@ var (
 		Name: "kdc_proxy_http_responses_413",
 		Help: "The total number of 413 Request Entity Too Large HTTP responses",
 	})
+	httpRespTooManyRequests = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "kdc_proxy_http_responses_429",
+		Help: "The total number of 429 Too Many Requests HTTP responses",
+	})
 	httpRespInternalServerError = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "kdc_proxy_http_responses_500",
 		Help: "The total number of 500 Internal Server Error HTTP responses",

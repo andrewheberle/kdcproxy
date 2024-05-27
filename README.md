@@ -12,14 +12,14 @@ This is a Go based KDC Proxy designed for use against Active Directory.
 ## Command Line
 
 ```sh
-go install github.com/andrewheberle/kdcproxy/cmd/kdcproxy@v1.2.8
+go install github.com/andrewheberle/kdcproxy/cmd/kdcproxy@v1.3.0
 ./kdcproxy --listen :8080
 ```
 
 ## Docker
 
 ```sh
-docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.2.8
+docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.3.0
 ```
 
 To run via HTTPS:
@@ -29,7 +29,7 @@ docker run -p 8443:8080 \
     -e KDC_PROXY_CERT=/ssl/server.crt \
     -e KDC_PROXY_KEY=/ssl/server.key \
     -v /path/to/certificates:/ssl:ro \
-    ghcr.io/andrewheberle/kdcproxy:v1.2.8
+    ghcr.io/andrewheberle/kdcproxy:v1.3.0
 ```
 
 # Configuration
@@ -42,6 +42,7 @@ The application supports the following options:
 | --cert | KDC_PROXY_CERT | | TLS Certificate (optional) |
 | --key | KDC_PROXY_KEY | | TLS KEY (optional) |
 | --krb5conf | KDC_PROXY_KRB5CONF | | Path to krb5.conf (optional) |
+| --rate | KDC_PROXY_RATE | 10 | Requests per second to the KDC allowed (optional) |
 
 [^1]: The default for the container is ":8080"
 

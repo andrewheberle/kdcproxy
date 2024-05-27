@@ -11,6 +11,7 @@ import (
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/messages"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -19,6 +20,9 @@ const (
 	protoUdp  = "udp"
 	protoTcp  = "tcp"
 )
+
+// DefaultRateLimit is the default number of requests per second to allow
+const DefaultRateLimit = 10
 
 // KdcProxyMsg represents a KDC_PROXY_MESSAGE as per https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-kkdcp/5778aff5-b182-4b97-a970-29c7f911eef2
 type KdcProxyMsg struct {
@@ -30,25 +34,36 @@ type KdcProxyMsg struct {
 // KerberosProxy is a KDC Proxy
 type KerberosProxy struct {
 	krb5Config *krb5config.Config
+	limiter    *rate.Limiter
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
 func InitKdcProxy() (*KerberosProxy, error) {
-	return initproxy("")
+	return initproxy("", DefaultRateLimit)
 }
 
 // InitKdcProxyWithConfig creates a KerberosProxy based on the configured "krb5.conf" file
 func InitKdcProxyWithConfig(config string) (*KerberosProxy, error) {
-	return initproxy(config)
+	return initproxy(config, DefaultRateLimit)
 }
 
-func initproxy(config string) (*KerberosProxy, error) {
+// InitKdcProxyWithLimit creates a KerberosProxy using the defaults of looking up KDC's via DNS
+func InitKdcProxyWithLimit(limit int) (*KerberosProxy, error) {
+	return initproxy("", limit)
+}
+
+// InitKdcProxyWithConfigAndLimit creates a KerberosProxy based on the configured "krb5.conf" file
+func InitKdcProxyWithConfigAndLimit(config string, limit int) (*KerberosProxy, error) {
+	return initproxy(config, limit)
+}
+
+func initproxy(config string, limit int) (*KerberosProxy, error) {
 	// with no config rely on DNS to find KDC
 	if config == "" {
 		cfg := krb5config.New()
 		cfg.LibDefaults.DNSLookupKDC = true
 
-		return &KerberosProxy{cfg}, nil
+		return &KerberosProxy{cfg, rate.NewLimiter(rate.Limit(limit), limit)}, nil
 	}
 
 	// load config from file
@@ -57,7 +72,7 @@ func initproxy(config string) (*KerberosProxy, error) {
 		return nil, err
 	}
 
-	return &KerberosProxy{cfg}, nil
+	return &KerberosProxy{cfg, rate.NewLimiter(rate.Limit(limit), limit)}, nil
 }
 
 // Handler implements a KDC Proxy endpoint over HTTP
@@ -102,6 +117,13 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+
+	// check rate limit to avoid DDoS of KDC
+	if !k.limiter.Allow() {
+		httpRespTooManyRequests.Inc()
+		http.Error(w, "Error reading from stream", http.StatusTooManyRequests)
+		return
+	}
 
 	// decode the message
 	msg, err := k.decode(data)
