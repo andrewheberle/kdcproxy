@@ -121,7 +121,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// check rate limit to avoid DDoS of KDC
 	if !k.limiter.Allow() {
 		httpRespTooManyRequests.Inc()
-		http.Error(w, "Error reading from stream", http.StatusTooManyRequests)
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
