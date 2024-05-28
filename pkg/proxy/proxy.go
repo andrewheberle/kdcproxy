@@ -287,6 +287,11 @@ func getresponse(conn net.Conn) ([]byte, error) {
 		// metrics
 		kerbResUdp.Inc()
 
+		// validate response
+		if !validReply(msg) {
+			return nil, fmt.Errorf("reply message was not valid")
+		}
+
 		// return message with length added
 		return append(MarshalKerbLength(len(msg)), msg...), nil
 	}
@@ -324,6 +329,28 @@ func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
 		return nil, err
 	}
 	return enc, nil
+}
+
+func validReply(msg []byte) bool {
+	// AS_REP
+	asRep := messages.ASRep{}
+	if err := asRep.Unmarshal(msg); err == nil {
+		return true
+	}
+
+	// TGS_REP
+	tgsRep := messages.TGSRep{}
+	if err := tgsRep.Unmarshal(msg); err == nil {
+		return true
+	}
+
+	// AP_REP
+	apRep := messages.APRep{}
+	if err := apRep.Unmarshal(msg); err == nil {
+		return true
+	}
+
+	return false
 }
 
 // UnmarshalKerbLength returns the length of a kerberos message based on the leading 4-bytes
