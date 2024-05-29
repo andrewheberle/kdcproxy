@@ -1,0 +1,4 @@
+- uses: actions/delete-package-versions@v5
+  with:
+    package-type: 'docker'
+    min-versions-to-keep: 10
