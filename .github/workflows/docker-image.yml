@@ -15,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag go-kdcproxy:$(date +%s)
+      run: docker build . --file Dockerfile --tag kdcproxy:$(date +%s)
     - uses: actions/delete-package-versions@v5
       with: 
         package-type: 'docker'
