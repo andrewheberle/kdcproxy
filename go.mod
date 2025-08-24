@@ -10,7 +10,7 @@ require (
 	github.com/oklog/run v1.1.0
 	github.com/prometheus/client_golang v1.17.0
 	github.com/rs/zerolog v1.30.0
-	github.com/spf13/pflag v1.0.5
+	github.com/spf13/pflag v1.0.7
 	github.com/spf13/viper v1.19.0
 	golang.org/x/time v0.5.0
 )
