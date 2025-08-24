@@ -7,7 +7,7 @@ require (
 	github.com/jcmturner/gofork v1.7.6
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/justinas/alice v1.2.0
-	github.com/oklog/run v1.1.0
+	github.com/oklog/run v1.2.0
 	github.com/prometheus/client_golang v1.17.0
 	github.com/rs/zerolog v1.30.0
 	github.com/spf13/pflag v1.0.7
