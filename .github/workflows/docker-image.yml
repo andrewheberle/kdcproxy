@@ -17,6 +17,7 @@ jobs:
     - name: Build the Docker image
       run: docker build . --file Dockerfile --tag kdcproxy:$(date +%s)
     - uses: actions/delete-package-versions@v5
-      with: 
+      with:
+        package-name: kdcproxy
         package-type: 'docker'
         min-versions-to-keep: 10
