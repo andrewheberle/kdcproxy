@@ -53,3 +53,10 @@ func TestMarshalKerbLength(t *testing.T) {
 		})
 	}
 }
+
+func TestInitKdcProxy_WithConfig(t *testing.T) {
+	_, err := InitKdcProxy(WithConfig("missing.conf"))
+	if err == nil {
+		t.Errorf("expected error attempting to load missing config file, got nil")
+	}
+}
