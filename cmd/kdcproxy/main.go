@@ -58,7 +58,13 @@ func main() {
 	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
 
 	// set up kdc proxy
-	k, err := proxy.InitKdcProxyWithConfigAndLimit(viper.GetString("krb5conf"), viper.GetInt("rate"))
+	opts := []proxy.ProxyOption{
+		proxy.WithLimit(viper.GetInt("rate")),
+	}
+	if config := viper.GetString("krb5conf"); config != "" {
+		opts = append(opts, proxy.WithConfig(config))
+	}
+	k, err := proxy.InitKdcProxy(opts...)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("could not set up kdc proxy")
 	}

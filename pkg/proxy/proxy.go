@@ -33,46 +33,55 @@ type KdcProxyMsg struct {
 
 // KerberosProxy is a KDC Proxy
 type KerberosProxy struct {
+	config string
+
 	krb5Config *krb5config.Config
 	limiter    *rate.Limiter
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
-func InitKdcProxy() (*KerberosProxy, error) {
-	return initproxy("", DefaultRateLimit)
+// with the abilty to override these defaults by providing ...[ProxyOption]
+func InitKdcProxy(opts ...ProxyOption) (*KerberosProxy, error) {
+	// set defaults
+	cfg := krb5config.New()
+	cfg.LibDefaults.DNSLookupKDC = true
+	kp := &KerberosProxy{
+		krb5Config: cfg,
+		limiter:    rate.NewLimiter(rate.Limit(DefaultRateLimit), DefaultRateLimit),
+	}
+
+	// apply options
+	for _, o := range opts {
+		o(kp)
+	}
+
+	// load config if set
+	if kp.config != "" {
+		// load config from file
+		cfg, err := krb5config.Load(kp.config)
+		if err != nil {
+			return nil, err
+		}
+
+		kp.krb5Config = cfg
+	}
+
+	return kp, nil
 }
 
-// InitKdcProxyWithConfig creates a KerberosProxy based on the configured "krb5.conf" file
+// Deprecated: Use InitKdcProxy(WithConfig(config)) instead
 func InitKdcProxyWithConfig(config string) (*KerberosProxy, error) {
-	return initproxy(config, DefaultRateLimit)
+	return InitKdcProxy(WithConfig(config))
 }
 
-// InitKdcProxyWithLimit creates a KerberosProxy using the defaults of looking up KDC's via DNS
+// Deprecated: Use InitKdcProxy(WithLimit(limit)) instead
 func InitKdcProxyWithLimit(limit int) (*KerberosProxy, error) {
-	return initproxy("", limit)
+	return InitKdcProxy(WithLimit(limit))
 }
 
-// InitKdcProxyWithConfigAndLimit creates a KerberosProxy based on the configured "krb5.conf" file
+// Deprecated: Use InitKdcProxy(WithConfig(config), WithLimit(limit)) instead
 func InitKdcProxyWithConfigAndLimit(config string, limit int) (*KerberosProxy, error) {
-	return initproxy(config, limit)
-}
-
-func initproxy(config string, limit int) (*KerberosProxy, error) {
-	// with no config rely on DNS to find KDC
-	if config == "" {
-		cfg := krb5config.New()
-		cfg.LibDefaults.DNSLookupKDC = true
-
-		return &KerberosProxy{cfg, rate.NewLimiter(rate.Limit(limit), limit)}, nil
-	}
-
-	// load config from file
-	cfg, err := krb5config.Load(config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &KerberosProxy{cfg, rate.NewLimiter(rate.Limit(limit), limit)}, nil
+	return InitKdcProxy(WithConfig(config), WithLimit(limit))
 }
 
 // Handler implements a KDC Proxy endpoint over HTTP
@@ -90,7 +99,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 	// we only handle POST's
 	if r.Method != http.MethodPost {
-		httpRespMethodNotAllowed.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusMethodNotAllowed)).Inc()
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -98,13 +107,13 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// check content length is valid
 	length := r.ContentLength
 	if length == -1 {
-		httpRespLengthRequired.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusLengthRequired)).Inc()
 		http.Error(w, "Content length required", http.StatusLengthRequired)
 		return
 	}
 
 	if length > maxLength {
-		httpRespRequestEntityTooLarge.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusRequestEntityTooLarge)).Inc()
 		http.Error(w, "Request entity too large", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -112,7 +121,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// read data from request body
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		httpRespInternalServerError.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusInternalServerError)).Inc()
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
@@ -120,7 +129,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 	// check rate limit to avoid DDoS of KDC
 	if !k.limiter.Allow() {
-		httpRespTooManyRequests.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
@@ -128,14 +137,14 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// decode the message
 	msg, err := k.decode(data)
 	if err != nil {
-		httpRespBadRequest.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusBadRequest)).Inc()
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
 	// fail if no realm is specified
 	if msg.TargetDomain == "" {
-		httpRespBadRequest.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusBadRequest)).Inc()
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -143,7 +152,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// forward to kdc(s)
 	resp, err := k.forward(msg)
 	if err != nil {
-		httpRespServiceUnavailable.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusServiceUnavailable)).Inc()
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -151,19 +160,26 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// encode response
 	reply, err := k.encode(resp)
 	if err != nil {
-		httpRespInternalServerError.Inc()
+		httpResp.WithLabelValues(http.StatusText(http.StatusInternalServerError)).Inc()
 		http.Error(w, "encoding error", http.StatusInternalServerError)
 		return
 	}
 
 	// metrics
-	httpRespOK.Inc()
+	httpResp.WithLabelValues(http.StatusText(http.StatusOK))
 
 	// send back to client
 	w.Write(reply)
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
+	// time forward process for metrics
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		kerbRespTimeHistogram.Observe(duration.Seconds())
+	}()
+
 	// use both udp and tcp
 	protocols := []string{protoUdp, protoTcp}
 	// if message is too large only use TCP
@@ -182,11 +198,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 		// try each kdc
 		for _, kdc := range kdcs {
 			// metrics
-			if proto == protoTcp {
-				kerbReqTcp.Inc()
-			} else {
-				kerbReqUdp.Inc()
-			}
+			kerbReqs.WithLabelValues("proto").Inc()
 
 			// connect to kdc
 			conn, err := net.Dial(proto, kdc)
@@ -285,7 +297,7 @@ func getresponse(conn net.Conn) ([]byte, error) {
 		}
 
 		// metrics
-		kerbResUdp.Inc()
+		kerbResp.WithLabelValues("udp").Inc()
 
 		// validate response
 		if !validReply(msg) {
@@ -315,7 +327,7 @@ func getresponse(conn net.Conn) ([]byte, error) {
 	}
 
 	// metrics
-	kerbResTcp.Inc()
+	kerbResp.WithLabelValues("tcp").Inc()
 
 	// return response (including length)
 	return append(buf, msg...), nil
