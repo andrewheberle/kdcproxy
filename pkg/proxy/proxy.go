@@ -40,7 +40,7 @@ type KerberosProxy struct {
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
-// with the abilty to override these defaults by providing ...[ProxyOption]
+// with the ability to override these defaults by providing ...[ProxyOption]
 func InitKdcProxy(opts ...ProxyOption) (*KerberosProxy, error) {
 	// set defaults
 	cfg := krb5config.New()
