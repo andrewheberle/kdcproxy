@@ -1,6 +1,8 @@
 module github.com/andrewheberle/kdcproxy
 
-go 1.23.0
+go 1.24.0
+
+toolchain go1.24.11
 
 require (
 	github.com/cloudflare/certinel v0.4.1
@@ -12,7 +14,7 @@ require (
 	github.com/rs/zerolog v1.34.0
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
-	golang.org/x/time v0.12.0
+	golang.org/x/time v0.14.0
 )
 
 require (
