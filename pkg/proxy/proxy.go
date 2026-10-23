@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,14 @@ const (
 
 // errResponseTooBig is returned for a KRB_ERR_RESPONSE_TOO_BIG reply over UDP
 var errResponseTooBig = errors.New("reply too big for UDP")
+
+// Password change protocol versions (RFC 3244)
+const (
+	kpasswdVersion            = 0x0001
+	kpasswdVersionSetPassword = 0xff80
+	// kpasswdHeaderLength covers the message length, version and AP-REQ/AP-REP length
+	kpasswdHeaderLength = 6
+)
 
 // DefaultRateLimit is the default number of requests per second to allow
 const DefaultRateLimit = 10
@@ -93,6 +102,14 @@ func (l *krb5Locator) realm(realm string) string {
 	}
 
 	return realm
+}
+
+// request is a decoded proxy message from a KKDCP client
+type request struct {
+	*KdcProxyMsg
+
+	// kpasswd is set for a password change request, which goes to a kpasswd server rather than a KDC
+	kpasswd bool
 }
 
 // KerberosProxy is a KDC Proxy
@@ -241,13 +258,19 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	func() { _, _ = w.Write(reply) }()
 }
 
-func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, error) {
+func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, error) {
 	// time forward process for metrics
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
 		kerbRespTimeHistogram.Observe(duration.Seconds())
 	}()
+
+	// password change replies are framed differently to KDC replies
+	valid := validReply
+	if msg.kpasswd {
+		valid = validKpasswdReply
+	}
 
 	// use both udp and tcp
 	protocols := []string{protoUdp, protoTcp}
@@ -259,7 +282,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, 
 	// try protocol options
 	for _, proto := range protocols {
 		// get kdcs
-		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, proto == protoTcp, false)
+		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, proto == protoTcp, msg.kpasswd)
 		if err != nil || len(kdcs) < 1 {
 			continue
 		}
@@ -296,7 +319,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, 
 			}
 
 			// get Kerberos response
-			resp, err := getresponse(conn)
+			resp, err := getresponse(conn, valid)
 			if errors.Is(err, errResponseTooBig) {
 				// skip the remaining udp kdcs and use tcp (RFC 4120 7.2.1)
 				break
@@ -313,7 +336,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, 
 	return nil, fmt.Errorf("no kdcs found for realm %s", msg.TargetDomain)
 }
 
-func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
+func (k *KerberosProxy) decode(data []byte) (*request, error) {
 	var m KdcProxyMsg
 
 	// unamrshal KDC-PROXY-MESSAGE
@@ -338,11 +361,14 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 
 	// the target-domain from the client is used for routing, so this only
 	// validates the Kerberos message
-	if !validRequest(m.KerbMessage[4:]) {
-		return nil, fmt.Errorf("message was not valid")
+	if validRequest(m.KerbMessage[4:]) {
+		return &request{KdcProxyMsg: &m}, nil
+	}
+	if validKpasswdRequest(m.KerbMessage[4:]) {
+		return &request{KdcProxyMsg: &m, kpasswd: true}, nil
 	}
 
-	return &m, nil
+	return nil, fmt.Errorf("message was not valid")
 }
 
 func validRequest(msg []byte) bool {
@@ -358,16 +384,79 @@ func validRequest(msg []byte) bool {
 		return true
 	}
 
-	// AP_REQ
-	apReq := messages.APReq{}
-	if err := apReq.Unmarshal(msg); err == nil {
-		return true
-	}
-
 	return false
 }
 
-func getresponse(conn net.Conn) ([]byte, error) {
+// validKpasswdRequest checks that msg is a password change request:
+// message length (2) | version (2) | AP-REQ length (2) | AP-REQ | KRB-PRIV
+func validKpasswdRequest(msg []byte) bool {
+	apReqLength, ok := kpasswdHeader(msg, kpasswdVersion, kpasswdVersionSetPassword)
+	if !ok {
+		return false
+	}
+
+	apReq := messages.APReq{}
+	if err := apReq.Unmarshal(msg[kpasswdHeaderLength : kpasswdHeaderLength+apReqLength]); err != nil {
+		return false
+	}
+
+	krbPriv := messages.KRBPriv{}
+	return krbPriv.Unmarshal(msg[kpasswdHeaderLength+apReqLength:]) == nil
+}
+
+// validKpasswdReply checks that msg is a password change reply, or a bare KRB_ERROR:
+// message length (2) | version (2) | AP-REP length (2) | AP-REP | KRB-PRIV,
+// with a KRB-ERROR in place of the AP-REP and KRB-PRIV when the AP-REP length is 0
+func validKpasswdReply(msg []byte) bool {
+	krbErr := messages.KRBError{}
+	if err := krbErr.Unmarshal(msg); err == nil {
+		return true
+	}
+
+	apRepLength, ok := kpasswdHeader(msg, kpasswdVersion)
+	if !ok {
+		return false
+	}
+	rest := msg[kpasswdHeaderLength+apRepLength:]
+
+	if apRepLength == 0 {
+		return krbErr.Unmarshal(rest) == nil
+	}
+
+	apRep := messages.APRep{}
+	if err := apRep.Unmarshal(msg[kpasswdHeaderLength : kpasswdHeaderLength+apRepLength]); err != nil {
+		return false
+	}
+
+	krbPriv := messages.KRBPriv{}
+	return krbPriv.Unmarshal(rest) == nil
+}
+
+// kpasswdHeader checks the header of a password change message and returns
+// the length of the AP-REQ or AP-REP that follows it
+func kpasswdHeader(msg []byte, versions ...uint16) (int, bool) {
+	if len(msg) < kpasswdHeaderLength {
+		return 0, false
+	}
+
+	// the message length includes itself
+	if int(binary.BigEndian.Uint16(msg[0:2])) != len(msg) {
+		return 0, false
+	}
+
+	if !slices.Contains(versions, binary.BigEndian.Uint16(msg[2:4])) {
+		return 0, false
+	}
+
+	length := int(binary.BigEndian.Uint16(msg[4:6]))
+	if length > len(msg)-kpasswdHeaderLength {
+		return 0, false
+	}
+
+	return length, true
+}
+
+func getresponse(conn net.Conn, valid func([]byte) bool) ([]byte, error) {
 	// close connection once done
 	defer func() { _ = conn.Close() }()
 
@@ -389,7 +478,7 @@ func getresponse(conn net.Conn) ([]byte, error) {
 		}
 
 		// validate response
-		if !validReply(msg) {
+		if !valid(msg) {
 			return nil, fmt.Errorf("reply message was not valid")
 		}
 
@@ -424,7 +513,7 @@ func getresponse(conn net.Conn) ([]byte, error) {
 	kerbResp.WithLabelValues("tcp").Inc()
 
 	// validate response
-	if !validReply(msg) {
+	if !valid(msg) {
 		return nil, fmt.Errorf("reply message was not valid")
 	}
 
