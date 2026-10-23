@@ -880,3 +880,33 @@ func TestKerberosRequestsMetric(t *testing.T) {
 		})
 	}
 }
+
+// TestHTTPResponsesMetric checks each response is counted under its status
+func TestHTTPResponsesMetric(t *testing.T) {
+	reply := krbError(t, errorcode.KDC_ERR_PREAUTH_REQUIRED, "")
+
+	tests := []struct {
+		name     string
+		method   string
+		locator  *fakeLocator
+		wantCode string
+	}{
+		{"ok", http.MethodPost, &fakeLocator{udp: []string{"kdc1:88"}}, http.StatusText(http.StatusOK)},
+		{"method_not_allowed", http.MethodGet, &fakeLocator{}, http.StatusText(http.StatusMethodNotAllowed)},
+		{"service_unavailable", http.MethodPost, &fakeLocator{}, http.StatusText(http.StatusServiceUnavailable)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k := newTestProxy(t, tt.locator, &fakeDialer{kdcs: map[string]fakeKDC{
+				"udp/kdc1:88": {reply: reply},
+			}})
+			before := counterValue(t, httpResp.WithLabelValues(tt.wantCode))
+
+			k.Handler(httptest.NewRecorder(), httptest.NewRequest(tt.method, "/KdcProxy", bytes.NewReader(fixture(t, "asreq1"))))
+
+			if got := counterValue(t, httpResp.WithLabelValues(tt.wantCode)) - before; got != 1 {
+				t.Errorf("responses with code %q increased by %v, want 1", tt.wantCode, got)
+			}
+		})
+	}
+}
