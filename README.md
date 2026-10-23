@@ -64,7 +64,7 @@ Clients must send the `target-domain` field in every proxy message, as the speci
 
 Password change requests (kpasswd, for example when a password has expired) are relayed to the realm's kpasswd servers. These are found through the `_kpasswd._udp`/`_kpasswd._tcp` DNS SRV records that Active Directory publishes, or through `kpasswd_server`/`admin_server` in krb5.conf.
 
-If a proxy message, or the Kerberos message inside it, is malformed, the connection is dropped without a response, as the specification says. A reverse proxy in front of the service will usually report these requests as HTTP 502.
+If a proxy message, or the Kerberos message inside it, is malformed, the connection is dropped without a response, as the specification says. A reverse proxy in front of the service will usually report these requests as HTTP 502. Each one is logged at WARN as `connection dropped`, with the request method, path, client address and request id.
 
 # Metrics
 
