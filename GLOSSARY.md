@@ -18,6 +18,10 @@ _Avoid_: user, browser
 The upstream Kerberos Key Distribution Center (an Active Directory domain controller) that the KKDCP server relays Kerberos messages to.
 _Avoid_: DC (except when quoting MS-NRPC), backend
 
+**Kpasswd server**:
+The upstream server (port 464 on an Active Directory domain controller) that the KKDCP server relays password change requests to. It is located separately from the KDC.
+_Avoid_: kadmin server, admin server
+
 ### Messages
 
 **Proxy message**:
@@ -27,6 +31,10 @@ _Avoid_: request, packet, envelope
 **Kerberos message**:
 The `kerb-message` payload of a proxy message: a Kerberos request or reply, including its 4-octet length prefix.
 _Avoid_: ticket, payload
+
+**Password change request**:
+A Kerberos message asking to change or set a password (KPASSWD-REQ; the spec's KRB_CHG_PWD_REQ). Its answer is a **password change reply**.
+_Avoid_: kadmin request, change password message
 
 ### Routing
 
