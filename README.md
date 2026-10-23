@@ -70,6 +70,10 @@ If a proxy message, or the Kerberos message inside it, is malformed, the connect
 
 Prometheus metrics are served at `/metrics`. Connections dropped without a response are counted in `kdc_proxy_http_dropped_connections_total`, labelled by `reason`. The only reason so far is `malformed_kerberos_message`. These requests are not counted in `kdc_proxy_http_responses_total`, because no response is sent.
 
+# Testing
+
+`go test ./...` runs the unit tests. Integration tests, which run MIT krb5 clients against a Samba AD DC through the service, are described in [test/integration](test/integration/README.md). Windows clients are checked by hand with the [Windows interop checklist](docs/testing/windows-interop.md).
+
 # Credits
 
 This was initially based on the KDC Proxy implementation here:

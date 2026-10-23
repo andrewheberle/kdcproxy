@@ -1,0 +1,69 @@
+# Integration test environment; driven by integration_test.go
+name: kdcproxy-integration
+
+x-kdcproxy: &kdcproxy
+  build:
+    context: ../..
+    dockerfile: test/integration/kdcproxy.Dockerfile
+  volumes:
+    - ./.run:/run/kdcproxy:ro
+  # the DC's DNS serves the AD SRV records used to locate the KDC and kpasswd server
+  dns:
+    - 172.30.53.10
+  depends_on:
+    dc:
+      condition: service_healthy
+  networks:
+    - kerberos
+
+services:
+  dc:
+    build:
+      context: .
+      dockerfile: samba.Dockerfile
+    hostname: dc1
+    # the CA, for reading the proxies' metrics in tests
+    volumes:
+      - ./.run:/run/kdcproxy:ro
+    environment:
+      ADMINPASS: Adm1n-Pa55word!
+    healthcheck:
+      # the KDC answers about a second after port 88 opens, so check with a real AS exchange
+      test: ["CMD-SHELL", "printf '%s\\n' \"$$ADMINPASS\" | kinit Administrator >/dev/null && kdestroy"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+    networks:
+      kerberos:
+        ipv4_address: 172.30.53.10
+
+  kdcproxy-udp:
+    <<: *kdcproxy
+    command: ["--listen", ":8443", "--cert", "/run/kdcproxy/server.crt", "--key", "/run/kdcproxy/server.key"]
+
+  kdcproxy-tcp:
+    <<: *kdcproxy
+    command: ["--listen", ":8443", "--cert", "/run/kdcproxy/server.crt", "--key", "/run/kdcproxy/server.key", "--krb5conf", "/etc/kdcproxy/krb5-tcp.conf"]
+    volumes:
+      - ./.run:/run/kdcproxy:ro
+      - ./kdcproxy/krb5-tcp.conf:/etc/kdcproxy/krb5-tcp.conf:ro
+
+  client:
+    build:
+      context: .
+      dockerfile: client.Dockerfile
+    volumes:
+      - ./.run:/run/kdcproxy:ro
+      - ./client:/etc/krb5:ro
+    depends_on:
+      - kdcproxy-udp
+      - kdcproxy-tcp
+    networks:
+      - kerberos
+
+networks:
+  kerberos:
+    ipam:
+      config:
+        - subnet: 172.30.53.0/24
