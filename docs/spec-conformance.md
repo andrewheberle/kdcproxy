@@ -44,8 +44,8 @@ This matrix records how the KKDCP server conforms to [MS-KKDCP] **revision 9.0 (
 | 3.2.5.1-2 | If `target-domain` is absent, return ERROR_BAD_FORMAT. | Conforms | Returns 400. | `TestHandlerRejects/3.2.5.1-2/missing_target_domain` |
 | 3.2.5.1-3 | Locate the KDC via the equivalent of `DsrGetDcNameEx2`, with the DC locator hint as flags (G and H if absent, plus U if FAST-armored). | Deviates (by design) | KDCs are located via DNS SRV or krb5.conf; the DC locator hint is ignored. See [ADR-0002](adr/0002-dns-srv-instead-of-dc-locator.md). | `TestKrb5Locator/3.2.5.1-3/` |
 | 3.2.5.1-4 | Use the address of the located DC. | Conforms | Uses the addresses returned by the lookup in 3.2.5.1-3. | `TestHandlerForwards/3.2.5.1-5/` |
-| 3.2.5.1-5 | Send `kerb-message` to the KDC. | Defect | UDP sends without the length prefix and TCP with it, which is correct. UDP replies are read until EOF, which never comes, so the read times out and the reply is discarded ([#97](https://github.com/andrewheberle/kdcproxy/issues/97)). KPASSWD-REQ goes to the KDC rather than the kpasswd service ([#101](https://github.com/andrewheberle/kdcproxy/issues/101)). | `TestHandlerForwards/3.2.5.1-5/`<br>`TestHandlerForwards/4.1/` |
-| 3.2.5.2-1 | Reply with a proxy message whose `kerb-message` is the Kerberos message response. | Defect | KRB-ERROR replies are dropped on the UDP path ([#98](https://github.com/andrewheberle/kdcproxy/issues/98)). | `TestHandlerForwards/3.2.5.2-1/`<br>`TestHandlerForwards/4.1/` |
+| 3.2.5.1-5 | Send `kerb-message` to the KDC. | Defect | UDP sends without the length prefix and TCP with it, which is correct. A UDP reply is read as one datagram. If there is no UDP reply, the request is retried over TCP. KPASSWD-REQ goes to the KDC rather than the kpasswd service ([#101](https://github.com/andrewheberle/kdcproxy/issues/101)). | `TestHandlerForwards/3.2.5.1-5/`<br>`TestHandlerForwards/4.1/` |
+| 3.2.5.2-1 | Reply with a proxy message whose `kerb-message` is the Kerberos message response. | Conforms | AS-REP, TGS-REP and KRB-ERROR replies are relayed unchanged over UDP and TCP, and KRB-ERRORs are not retried against another KDC. KRB_ERR_RESPONSE_TOO_BIG over UDP moves on to the TCP KDCs (RFC 4120 §7.2.1). | `TestHandlerForwards/3.2.5.2-1/`<br>`TestHandlerForwards/4.1/` |
 | 3.2.5.2-2 | Send the reply on the same HTTP connection. | Conforms | Sent as `application/kerberos`. | `TestHandlerForwards` (every row checks Content-Type) |
 
 ## §4 Capabilities shown in examples
@@ -59,7 +59,7 @@ This matrix records how the KKDCP server conforms to [MS-KKDCP] **revision 9.0 (
 
 | Clause | Required | Status | Notes | Tests |
 |-|-|-|-|-|
-| 5.1-1 | Relay only valid Kerberos messages. | Defect | Requests are validated. Replies are validated only on UDP, and that validation rejects KRB-ERROR ([#98](https://github.com/andrewheberle/kdcproxy/issues/98)). | `TestHandlerDrops/3.2.5.1-1/`<br>`TestHandlerForwards/3.2.5.2-1/tcp_reply_not_validated` |
+| 5.1-1 | Relay only valid Kerberos messages. | Conforms | Requests are validated (3.2.5.1-1). Replies must be AS-REP, TGS-REP or KRB-ERROR, and TCP replies over 128 KiB are refused before being read; otherwise the next KDC is tried. | `TestHandlerDrops/3.2.5.1-1/`<br>`TestHandlerForwards/5.1-1/`<br>`TestGetResponseLengthLimit/5.1-1/` |
 | 5.1-2 | Throttle messages. | Conforms | Token-bucket limit set by `--rate`; requests over it get 429. | `TestHandlerRejects/5.1-2/rate_limited` |
 | 5.1-3 | TLS client authentication, if needed, to avoid opening unauthenticated KDC access. | N/A | Optional, and not offered. If it's ever added, it should use 403, the only status clients treat specially (3.1.5.3-1). | — |
 

@@ -3,6 +3,8 @@ package proxy
 import (
 	"bytes"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,8 +14,11 @@ import (
 	"testing"
 
 	"github.com/jcmturner/gofork/encoding/asn1"
+	"github.com/jcmturner/gokrb5/v8/asn1tools"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/iana/asnAppTag"
 	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
+	"github.com/jcmturner/gokrb5/v8/iana/msgtype"
 	"github.com/jcmturner/gokrb5/v8/iana/nametype"
 	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/jcmturner/gokrb5/v8/types"
@@ -131,14 +136,82 @@ func serverProxyMessage(t *testing.T, kerbMessage []byte) []byte {
 	return b
 }
 
-// krbError returns a KDC_ERR_PREAUTH_REQUIRED KRB-ERROR, the usual first reply to an AS-REQ
-func krbError(t *testing.T) []byte {
+// krbError returns a KRB-ERROR with the given error code
+func krbError(t *testing.T, code int32, etext string) []byte {
 	t.Helper()
 
-	e := messages.NewKRBError(types.NewPrincipalName(nametype.KRB_NT_SRV_INST, "krbtgt/"+testRealm), testRealm, errorcode.KDC_ERR_PREAUTH_REQUIRED, "")
+	e := messages.NewKRBError(types.NewPrincipalName(nametype.KRB_NT_SRV_INST, "krbtgt/"+testRealm), testRealm, code, etext)
 	b, err := e.Marshal()
 	if err != nil {
 		t.Fatalf("encoding KRB-ERROR: %v", err)
+	}
+
+	return b
+}
+
+// kdcRepFields returns the fields of an AS-REP or TGS-REP with dummy encrypted parts
+func kdcRepFields(msgType int) messages.KDCRepFields {
+	encrypted := types.EncryptedData{EType: 18, Cipher: []byte{0}}
+
+	return messages.KDCRepFields{
+		PVNO:    5,
+		MsgType: msgType,
+		CRealm:  testRealm,
+		CName:   types.NewPrincipalName(nametype.KRB_NT_PRINCIPAL, "admin"),
+		Ticket: messages.Ticket{
+			TktVNO:  5,
+			Realm:   testRealm,
+			SName:   types.NewPrincipalName(nametype.KRB_NT_SRV_INST, "krbtgt/"+testRealm),
+			EncPart: encrypted,
+		},
+		EncPart: encrypted,
+	}
+}
+
+// asRep returns an AS-REP
+func asRep(t *testing.T) []byte {
+	t.Helper()
+
+	r := messages.ASRep{KDCRepFields: kdcRepFields(msgtype.KRB_AS_REP)}
+	b, err := r.Marshal()
+	if err != nil {
+		t.Fatalf("encoding AS-REP: %v", err)
+	}
+	if err := r.Unmarshal(b); err != nil {
+		t.Fatalf("decoding AS-REP: %v", err)
+	}
+
+	return b
+}
+
+// tgsRep returns a TGS-REP
+func tgsRep(t *testing.T) []byte {
+	t.Helper()
+
+	r := messages.TGSRep{KDCRepFields: kdcRepFields(msgtype.KRB_TGS_REP)}
+	b, err := r.Marshal()
+	if err != nil {
+		t.Fatalf("encoding TGS-REP: %v", err)
+	}
+	if err := r.Unmarshal(b); err != nil {
+		t.Fatalf("decoding TGS-REP: %v", err)
+	}
+
+	return b
+}
+
+// apRep returns an AP-REP, which a KDC never sends on its own
+func apRep(t *testing.T) []byte {
+	t.Helper()
+
+	r := messages.APRep{PVNO: 5, MsgType: msgtype.KRB_AP_REP, EncPart: types.EncryptedData{EType: 18, Cipher: []byte{0}}}
+	b, err := asn1.Marshal(r)
+	if err != nil {
+		t.Fatalf("encoding AP-REP: %v", err)
+	}
+	b = asn1tools.AddASNAppTag(b, asnAppTag.APREP)
+	if err := r.Unmarshal(b); err != nil {
+		t.Fatalf("decoding AP-REP: %v", err)
 	}
 
 	return b
@@ -317,9 +390,16 @@ func TestHandlerDrops(t *testing.T) {
 func TestHandlerForwards(t *testing.T) {
 	asReq := fixtureKerbMessage(t, "asreq1")
 	tgsReq := fixtureKerbMessage(t, "tgsreq")
-	reply := krbError(t)
+	reply := krbError(t, errorcode.KDC_ERR_PREAUTH_REQUIRED, "")
+	fromKDC2 := krbError(t, errorcode.KDC_ERR_PREAUTH_REQUIRED, "kdc2")
+	unknown := krbError(t, errorcode.KDC_ERR_C_PRINCIPAL_UNKNOWN, "")
+	tooBig := krbError(t, errorcode.KRB_ERR_RESPONSE_TOO_BIG, "")
+	garbage := []byte("not kerberos")
 
+	udpOnly := []locateCall{{realm: testRealm}}
 	udpThenTCP := []locateCall{{realm: testRealm}, {realm: testRealm, tcp: true}}
+	tcpOnly := []locateCall{{realm: testRealm, tcp: true}}
+	forceTCP := func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 }
 	oneKDC := func(reply []byte) *fakeDialer {
 		return &fakeDialer{kdcs: map[string]fakeKDC{
 			"udp/kdc1:88": {reply: reply},
@@ -344,28 +424,22 @@ func TestHandlerForwards(t *testing.T) {
 			name:       "as_req",
 			body:       fixture(t, "asreq1"),
 			locator:    &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc1:88"}},
-			dialer:     oneKDC(reply),
+			dialer:     oneKDC(asRep(t)),
 			wantStatus: http.StatusOK,
-			wantReply:  withLengthPrefix(reply),
-			wantLocate: udpThenTCP,
-			wantSent: []sent{
-				{network: "udp", addr: "kdc1:88", data: asReq[4:]},
-				{network: "tcp", addr: "kdc1:88", data: asReq},
-			},
+			wantReply:  withLengthPrefix(asRep(t)),
+			wantLocate: udpOnly,
+			wantSent:   []sent{{network: "udp", addr: "kdc1:88", data: asReq[4:]}},
 		},
 		{
 			clause:     "4.1",
 			name:       "tgs_req",
 			body:       fixture(t, "tgsreq"),
 			locator:    &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc1:88"}},
-			dialer:     oneKDC(reply),
+			dialer:     oneKDC(tgsRep(t)),
 			wantStatus: http.StatusOK,
-			wantReply:  withLengthPrefix(reply),
-			wantLocate: udpThenTCP,
-			wantSent: []sent{
-				{network: "udp", addr: "kdc1:88", data: tgsReq[4:]},
-				{network: "tcp", addr: "kdc1:88", data: tgsReq},
-			},
+			wantReply:  withLengthPrefix(tgsRep(t)),
+			wantLocate: udpOnly,
+			wantSent:   []sent{{network: "udp", addr: "kdc1:88", data: tgsReq[4:]}},
 		},
 		{
 			clause:     "2.2.2-2",
@@ -373,7 +447,7 @@ func TestHandlerForwards(t *testing.T) {
 			body:       proxyMessage(t, asReq, "OTHER.REALM"),
 			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
 			dialer:     oneKDC(reply),
-			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
+			setup:      forceTCP,
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
 			wantLocate: []locateCall{{realm: "OTHER.REALM", tcp: true}},
@@ -385,23 +459,23 @@ func TestHandlerForwards(t *testing.T) {
 			body:       proxyMessage(t, asReq, "freeipa.local"),
 			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
 			dialer:     oneKDC(reply),
-			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
+			setup:      forceTCP,
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
 			wantLocate: []locateCall{{realm: "freeipa.local", tcp: true}},
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
 		},
 		{
-			clause:     "3.2.5.1-5",
-			name:       "udp_reply_times_out_then_tcp",
-			body:       fixture(t, "asreq1"),
-			locator:    &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc2:88"}},
+			clause:  "3.2.5.1-5",
+			name:    "udp_timeout_then_tcp",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc2:88"}},
 			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
-				"udp/kdc1:88": {reply: reply},
-				"tcp/kdc2:88": {reply: []byte("from tcp")},
+				"udp/kdc1:88": {},
+				"tcp/kdc2:88": {reply: fromKDC2},
 			}},
 			wantStatus: http.StatusOK,
-			wantReply:  withLengthPrefix([]byte("from tcp")),
+			wantReply:  withLengthPrefix(fromKDC2),
 			wantLocate: udpThenTCP,
 			wantSent: []sent{
 				{network: "udp", addr: "kdc1:88", data: asReq[4:]},
@@ -417,7 +491,7 @@ func TestHandlerForwards(t *testing.T) {
 			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = len(asReq) - 5 },
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
+			wantLocate: tcpOnly,
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
 		},
 		{
@@ -429,10 +503,10 @@ func TestHandlerForwards(t *testing.T) {
 				"tcp/kdc1:88": {dialErr: errors.New("connection refused")},
 				"tcp/kdc2:88": {reply: reply},
 			}},
-			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
+			setup:      forceTCP,
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
+			wantLocate: tcpOnly,
 			wantSent:   []sent{{network: "tcp", addr: "kdc2:88", data: asReq}},
 		},
 		{
@@ -446,15 +520,160 @@ func TestHandlerForwards(t *testing.T) {
 		},
 		{
 			clause:     "3.2.5.2-1",
-			name:       "tcp_reply_not_validated",
+			name:       "krb_error_relayed_over_udp",
+			body:       fixture(t, "asreq1"),
+			locator:    &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc1:88"}},
+			dialer:     oneKDC(reply),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(reply),
+			wantLocate: udpOnly,
+			wantSent:   []sent{{network: "udp", addr: "kdc1:88", data: asReq[4:]}},
+		},
+		{
+			clause:     "3.2.5.2-1",
+			name:       "krb_error_relayed_over_tcp",
 			body:       fixture(t, "asreq1"),
 			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
-			dialer:     oneKDC([]byte("not kerberos")),
-			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
+			dialer:     oneKDC(reply),
+			setup:      forceTCP,
 			wantStatus: http.StatusOK,
-			wantReply:  withLengthPrefix([]byte("not kerberos")),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
+			wantReply:  withLengthPrefix(reply),
+			wantLocate: tcpOnly,
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
+		},
+		{
+			clause:  "3.2.5.2-1",
+			name:    "krb_error_not_retried",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{udp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"udp/kdc1:88": {reply: unknown},
+				"udp/kdc2:88": {reply: fromKDC2},
+			}},
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(unknown),
+			wantLocate: udpOnly,
+			wantSent:   []sent{{network: "udp", addr: "kdc1:88", data: asReq[4:]}},
+		},
+		{
+			clause:  "3.2.5.2-1",
+			name:    "response_too_big_moves_to_tcp",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{udp: []string{"kdc1:88", "kdc2:88"}, tcp: []string{"kdc3:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"udp/kdc1:88": {reply: tooBig},
+				"udp/kdc2:88": {reply: tooBig},
+				"tcp/kdc3:88": {reply: reply},
+			}},
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(reply),
+			wantLocate: udpThenTCP,
+			wantSent: []sent{
+				{network: "udp", addr: "kdc1:88", data: asReq[4:]},
+				{network: "tcp", addr: "kdc3:88", data: asReq},
+			},
+		},
+		{
+			clause:  "5.1-1",
+			name:    "udp_invalid_reply_next_kdc",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{udp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"udp/kdc1:88": {reply: garbage},
+				"udp/kdc2:88": {reply: fromKDC2},
+			}},
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(fromKDC2),
+			wantLocate: udpOnly,
+			wantSent: []sent{
+				{network: "udp", addr: "kdc1:88", data: asReq[4:]},
+				{network: "udp", addr: "kdc2:88", data: asReq[4:]},
+			},
+		},
+		{
+			clause:  "5.1-1",
+			name:    "tcp_invalid_reply_next_kdc",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{tcp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"tcp/kdc1:88": {reply: garbage},
+				"tcp/kdc2:88": {reply: fromKDC2},
+			}},
+			setup:      forceTCP,
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(fromKDC2),
+			wantLocate: tcpOnly,
+			wantSent: []sent{
+				{network: "tcp", addr: "kdc1:88", data: asReq},
+				{network: "tcp", addr: "kdc2:88", data: asReq},
+			},
+		},
+		{
+			clause:  "5.1-1",
+			name:    "ap_rep_not_relayed",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{tcp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"tcp/kdc1:88": {reply: apRep(t)},
+				"tcp/kdc2:88": {reply: fromKDC2},
+			}},
+			setup:      forceTCP,
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(fromKDC2),
+			wantLocate: tcpOnly,
+			wantSent: []sent{
+				{network: "tcp", addr: "kdc1:88", data: asReq},
+				{network: "tcp", addr: "kdc2:88", data: asReq},
+			},
+		},
+		{
+			clause:  "5.1-1",
+			name:    "tcp_length_prefix_over_max",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{tcp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"tcp/kdc1:88": {raw: append(MarshalKerbLength(maxLength+1), make([]byte, maxLength+1)...)},
+				"tcp/kdc2:88": {reply: fromKDC2},
+			}},
+			setup:      forceTCP,
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(fromKDC2),
+			wantLocate: tcpOnly,
+			wantSent: []sent{
+				{network: "tcp", addr: "kdc1:88", data: asReq},
+				{network: "tcp", addr: "kdc2:88", data: asReq},
+			},
+		},
+		{
+			clause:  "5.1-1",
+			name:    "tcp_length_prefix_high_bit",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{tcp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"tcp/kdc1:88": {raw: append(MarshalKerbLength(1<<31|len(reply)), reply...)},
+				"tcp/kdc2:88": {reply: fromKDC2},
+			}},
+			setup:      forceTCP,
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(fromKDC2),
+			wantLocate: tcpOnly,
+			wantSent: []sent{
+				{network: "tcp", addr: "kdc1:88", data: asReq},
+				{network: "tcp", addr: "kdc2:88", data: asReq},
+			},
+		},
+		{
+			clause:     "5.1-1",
+			name:       "no_valid_reply",
+			body:       fixture(t, "asreq1"),
+			locator:    &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc1:88"}},
+			dialer:     oneKDC(garbage),
+			wantStatus: http.StatusServiceUnavailable,
+			wantLocate: udpThenTCP,
+			wantSent: []sent{
+				{network: "udp", addr: "kdc1:88", data: asReq[4:]},
+				{network: "tcp", addr: "kdc1:88", data: asReq},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -572,6 +791,54 @@ func TestKdcProxyMsgEncoding(t *testing.T) {
 			}
 			if !bytes.Equal(got, b) {
 				t.Errorf("asn1.Marshal() = %x, want %x", got, b)
+			}
+		})
+	}
+}
+
+// prefixOnlyConn is a TCP connection that sends only a length prefix and
+// records any attempt to read past it
+type prefixOnlyConn struct {
+	fakeUDPConn
+	prefix   []byte
+	bodyRead bool
+}
+
+func (c *prefixOnlyConn) Read(b []byte) (int, error) {
+	if len(c.prefix) > 0 {
+		n := copy(b, c.prefix)
+		c.prefix = c.prefix[n:]
+		return n, nil
+	}
+	c.bodyRead = true
+
+	return 0, io.EOF
+}
+
+func (c *prefixOnlyConn) LocalAddr() net.Addr { return &net.TCPAddr{} }
+
+// TestGetResponseLengthLimit checks an oversized TCP reply is refused before
+// its body is read or allocated
+func TestGetResponseLengthLimit(t *testing.T) {
+	tests := []struct {
+		clause       string
+		name         string
+		length       int
+		wantBodyRead bool
+	}{
+		{"5.1-1", "at_max", maxLength, true},
+		{"5.1-1", "over_max", maxLength + 1, false},
+		{"5.1-1", "high_bit", 1 << 31, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
+			conn := &prefixOnlyConn{prefix: MarshalKerbLength(tt.length)}
+
+			if _, err := getresponse(conn); err == nil {
+				t.Errorf("getresponse() error = nil, want error")
+			}
+			if conn.bodyRead != tt.wantBodyRead {
+				t.Errorf("body read = %v, want %v", conn.bodyRead, tt.wantBodyRead)
 			}
 		})
 	}

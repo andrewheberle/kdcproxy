@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,16 +14,22 @@ import (
 
 	"github.com/jcmturner/gofork/encoding/asn1"
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
 	"github.com/jcmturner/gokrb5/v8/messages"
 	"golang.org/x/time/rate"
 )
 
 const (
 	maxLength = 128 * 1024
+	// maxUDPReply is the largest UDP payload
+	maxUDPReply = 65535
 	timeout   = 2 * time.Second
 	protoUdp  = "udp"
 	protoTcp  = "tcp"
 )
+
+// errResponseTooBig is returned for a KRB_ERR_RESPONSE_TOO_BIG reply over UDP
+var errResponseTooBig = errors.New("reply too big for UDP")
 
 // DefaultRateLimit is the default number of requests per second to allow
 const DefaultRateLimit = 10
@@ -290,6 +297,10 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, 
 
 			// get Kerberos response
 			resp, err := getresponse(conn)
+			if errors.Is(err, errResponseTooBig) {
+				// skip the remaining udp kdcs and use tcp (RFC 4120 7.2.1)
+				break
+			}
 			if err != nil {
 				// for an error try next kdc
 				continue
@@ -362,14 +373,20 @@ func getresponse(conn net.Conn) ([]byte, error) {
 
 	// handle udp and tcp responses differently
 	if conn.LocalAddr().Network() == protoUdp {
-		// for udp just read response
-		msg, err := io.ReadAll(conn)
+		// for udp the response is a single datagram, so there is no EOF to wait for
+		buf := make([]byte, maxUDPReply)
+		n, err := conn.Read(buf)
 		if err != nil {
 			return nil, err
 		}
+		msg := buf[:n]
 
 		// metrics
 		kerbResp.WithLabelValues("udp").Inc()
+
+		if responseTooBig(msg) {
+			return nil, errResponseTooBig
+		}
 
 		// validate response
 		if !validReply(msg) {
@@ -392,6 +409,11 @@ func getresponse(conn net.Conn) ([]byte, error) {
 		return nil, err
 	}
 
+	// limit the length, which also rejects the reserved high bit (RFC 4120 7.2.2)
+	if length < 0 || length > maxLength {
+		return nil, fmt.Errorf("reply length %d exceeds maximum %d", length, maxLength)
+	}
+
 	// read rest of message
 	msg := make([]byte, length)
 	if _, err := io.ReadFull(conn, msg); err != nil {
@@ -400,6 +422,11 @@ func getresponse(conn net.Conn) ([]byte, error) {
 
 	// metrics
 	kerbResp.WithLabelValues("tcp").Inc()
+
+	// validate response
+	if !validReply(msg) {
+		return nil, fmt.Errorf("reply message was not valid")
+	}
 
 	// return response (including length)
 	return append(buf, msg...), nil
@@ -415,6 +442,7 @@ func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
 	return enc, nil
 }
 
+// validReply checks that msg is a reply a KDC sends: an AS_REP, TGS_REP or KRB_ERROR
 func validReply(msg []byte) bool {
 	// AS_REP
 	asRep := messages.ASRep{}
@@ -428,13 +456,23 @@ func validReply(msg []byte) bool {
 		return true
 	}
 
-	// AP_REP
-	apRep := messages.APRep{}
-	if err := apRep.Unmarshal(msg); err == nil {
+	// KRB_ERROR
+	krbErr := messages.KRBError{}
+	if err := krbErr.Unmarshal(msg); err == nil {
 		return true
 	}
 
 	return false
+}
+
+// responseTooBig checks if msg is a KRB_ERROR asking for the request to be sent over TCP
+func responseTooBig(msg []byte) bool {
+	krbErr := messages.KRBError{}
+	if err := krbErr.Unmarshal(msg); err != nil {
+		return false
+	}
+
+	return krbErr.ErrorCode == errorcode.KRB_ERR_RESPONSE_TOO_BIG
 }
 
 // UnmarshalKerbLength returns the length of a kerberos message based on the leading 4-bytes
