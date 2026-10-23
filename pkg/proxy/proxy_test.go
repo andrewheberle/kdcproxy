@@ -17,6 +17,8 @@ import (
 	"github.com/jcmturner/gokrb5/v8/iana/nametype"
 	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/jcmturner/gokrb5/v8/types"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"golang.org/x/time/rate"
 )
 
@@ -147,6 +149,18 @@ func withLengthPrefix(b []byte) []byte {
 	return append(MarshalKerbLength(len(b)), b...)
 }
 
+// counterValue returns the current value of a Prometheus counter
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("reading counter: %v", err)
+	}
+
+	return m.GetCounter().GetValue()
+}
+
 func newTestProxy(t *testing.T, locator kdcLocator, dialer dialer) *KerberosProxy {
 	t.Helper()
 
@@ -202,69 +216,6 @@ func TestHandlerRejects(t *testing.T) {
 			wantContentType: "text/plain; charset=utf-8",
 		},
 		{
-			clause:          "2.1-4",
-			name:            "not_der",
-			body:            []byte("not a proxy message"),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "2.1-4",
-			name:            "trailing_data",
-			body:            append(fixture(t, "asreq1"), 0x00),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "2.2.2-1",
-			name:            "empty",
-			body:            proxyMessage(t, []byte{}, testRealm),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "2.2.2-1",
-			name:            "three_octets",
-			body:            proxyMessage(t, []byte{0, 0, 0}, testRealm),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "2.2.2-1",
-			name:            "length_prefix_too_short",
-			body:            proxyMessage(t, append(MarshalKerbLength(len(asReq)-5), asReq[4:]...), testRealm),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "2.2.2-1",
-			name:            "length_prefix_too_long",
-			body:            proxyMessage(t, append(MarshalKerbLength(len(asReq)-3), asReq[4:]...), testRealm),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "2.2.2-1",
-			name:            "length_prefix_only",
-			body:            proxyMessage(t, MarshalKerbLength(0), testRealm),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "3.2.5.1-1",
-			name:            "not_kerberos",
-			body:            proxyMessage(t, withLengthPrefix([]byte("not kerberos")), testRealm),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
-			clause:          "3.2.5.1-1",
-			name:            "kpasswd_req_not_recognised",
-			body:            fixture(t, "kpasswdreq"),
-			wantStatus:      http.StatusBadRequest,
-			wantContentType: "text/plain; charset=utf-8",
-		},
-		{
 			clause:          "3.2.5.1-2",
 			name:            "missing_target_domain",
 			body:            proxyMessage(t, asReq, ""),
@@ -310,6 +261,54 @@ func TestHandlerRejects(t *testing.T) {
 			if len(locator.calls) != 0 || len(dialer.dials) != 0 {
 				t.Errorf("KDC contacted: locate calls %v, dials %v", locator.calls, dialer.dials)
 			}
+		})
+	}
+}
+
+// TestHandlerDrops covers malformed messages, where MS-KKDCP 3.2.5.1-1 says
+// to drop the connection rather than respond
+func TestHandlerDrops(t *testing.T) {
+	asReq := fixtureKerbMessage(t, "asreq1")
+
+	tests := []struct {
+		clause string
+		name   string
+		body   []byte
+	}{
+		{"2.1-4", "not_der", []byte("not a proxy message")},
+		{"2.1-4", "trailing_data", append(fixture(t, "asreq1"), 0x00)},
+		{"2.2.2-1", "empty", proxyMessage(t, []byte{}, testRealm)},
+		{"2.2.2-1", "three_octets", proxyMessage(t, []byte{0, 0, 0}, testRealm)},
+		{"2.2.2-1", "length_prefix_too_short", proxyMessage(t, append(MarshalKerbLength(len(asReq)-5), asReq[4:]...), testRealm)},
+		{"2.2.2-1", "length_prefix_too_long", proxyMessage(t, append(MarshalKerbLength(len(asReq)-3), asReq[4:]...), testRealm)},
+		{"2.2.2-1", "length_prefix_only", proxyMessage(t, MarshalKerbLength(0), testRealm)},
+		{"3.2.5.1-1", "not_kerberos", proxyMessage(t, withLengthPrefix([]byte("not kerberos")), testRealm)},
+		{"3.2.5.1-1", "kpasswd_req_not_recognised", fixture(t, "kpasswdreq")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
+			locator := &fakeLocator{}
+			dialer := &fakeDialer{}
+			k := newTestProxy(t, locator, dialer)
+			r := httptest.NewRequest(http.MethodPost, "/KdcProxy", bytes.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			dropped := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage))
+
+			defer func() {
+				if got := recover(); got != http.ErrAbortHandler {
+					t.Errorf("Handler() panic = %v, want %v", got, http.ErrAbortHandler)
+				}
+				if w.Body.Len() != 0 {
+					t.Errorf("body = %q, want nothing written", w.Body.Bytes())
+				}
+				if got := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage)) - dropped; got != 1 {
+					t.Errorf("dropped connections counter increased by %v, want 1", got)
+				}
+				if len(locator.calls) != 0 || len(dialer.dials) != 0 {
+					t.Errorf("KDC contacted: locate calls %v, dials %v", locator.calls, dialer.dials)
+				}
+			}()
+			k.Handler(w, r)
 		})
 	}
 }

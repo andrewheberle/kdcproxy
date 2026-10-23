@@ -62,6 +62,12 @@ Conformance to the specification is tracked clause by clause in [docs/spec-confo
 
 Clients must send the `target-domain` field in every proxy message, as the specification requires. It decides which realm the request is routed to, and requests without it are rejected with HTTP 400. Windows and MIT krb5 clients send it.
 
+If a proxy message, or the Kerberos message inside it, is malformed, the connection is dropped without a response, as the specification says. A reverse proxy in front of the service will usually report these requests as HTTP 502.
+
+# Metrics
+
+Prometheus metrics are served at `/metrics`. Connections dropped without a response are counted in `kdc_proxy_http_dropped_connections_total`, labelled by `reason`. The only reason so far is `malformed_kerberos_message`. These requests are not counted in `kdc_proxy_http_responses_total`, because no response is sent.
+
 # Credits
 
 This was initially based on the KDC Proxy implementation here:

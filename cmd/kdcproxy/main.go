@@ -60,7 +60,7 @@ func main() {
 	mux.Handle("/metrics", k.Metrics())
 
 	// set up logged handler
-	handler := sloghttp.Recovery(mux)
+	handler := recovery(logger)(mux)
 	handler = sloghttp.New(logger)(handler)
 
 	// set up server
