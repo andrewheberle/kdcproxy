@@ -58,6 +58,8 @@ This service follows the MS-KKDCP specification that is published here:
 
 https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-kkdcp/5bcebb8d-b747-4ee5-9453-428aec1c5c38
 
+Conformance to the specification is tracked clause by clause in [docs/spec-conformance.md](docs/spec-conformance.md), including any deliberate deviations and known defects.
+
 # Credits
 
 This was initially based on the KDC Proxy implementation here:
