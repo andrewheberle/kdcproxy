@@ -23,9 +23,9 @@ const (
 	maxLength = 128 * 1024
 	// maxUDPReply is the largest UDP payload
 	maxUDPReply = 65535
-	timeout   = 2 * time.Second
-	protoUdp  = "udp"
-	protoTcp  = "tcp"
+	timeout     = 2 * time.Second
+	protoUdp    = "udp"
+	protoTcp    = "tcp"
 )
 
 // errResponseTooBig is returned for a KRB_ERR_RESPONSE_TOO_BIG reply over UDP
@@ -235,7 +235,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// metrics
-	httpResp.WithLabelValues(http.StatusText(http.StatusOK))
+	httpResp.WithLabelValues(http.StatusText(http.StatusOK)).Inc()
 
 	// send back to client
 	func() { _, _ = w.Write(reply) }()
