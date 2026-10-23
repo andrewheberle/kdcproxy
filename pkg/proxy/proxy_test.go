@@ -843,3 +843,40 @@ func TestGetResponseLengthLimit(t *testing.T) {
 		})
 	}
 }
+
+// TestKerberosRequestsMetric checks requests to KDCs are counted by protocol
+func TestKerberosRequestsMetric(t *testing.T) {
+	reply := krbError(t, errorcode.KDC_ERR_PREAUTH_REQUIRED, "")
+
+	tests := []struct {
+		name    string
+		setup   func(*KerberosProxy)
+		wantUDP float64
+		wantTCP float64
+	}{
+		{"udp", nil, 1, 0},
+		{"tcp", func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 }, 0, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k := newTestProxy(t, &fakeLocator{udp: []string{"kdc1:88"}, tcp: []string{"kdc1:88"}}, &fakeDialer{kdcs: map[string]fakeKDC{
+				"udp/kdc1:88": {reply: reply},
+				"tcp/kdc1:88": {reply: reply},
+			}})
+			if tt.setup != nil {
+				tt.setup(k)
+			}
+			udp := counterValue(t, kerbReqs.WithLabelValues(protoUdp))
+			tcp := counterValue(t, kerbReqs.WithLabelValues(protoTcp))
+
+			k.Handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/KdcProxy", bytes.NewReader(fixture(t, "asreq1"))))
+
+			if got := counterValue(t, kerbReqs.WithLabelValues(protoUdp)) - udp; got != tt.wantUDP {
+				t.Errorf("udp requests increased by %v, want %v", got, tt.wantUDP)
+			}
+			if got := counterValue(t, kerbReqs.WithLabelValues(protoTcp)) - tcp; got != tt.wantTCP {
+				t.Errorf("tcp requests increased by %v, want %v", got, tt.wantTCP)
+			}
+		})
+	}
+}
