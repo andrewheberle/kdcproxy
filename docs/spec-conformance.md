@@ -40,11 +40,11 @@ This matrix records how the KKDCP server conforms to [MS-KKDCP] **revision 9.0 (
 | Clause | Required | Status | Notes | Tests |
 |-|-|-|-|-|
 | 3.2.3-1 | Open an HTTP/HTTPS endpoint before receiving requests. | Conforms | | — |
-| 3.2.5.1-1 | Validate that `kerb-message` is a well-formed Kerberos message, otherwise drop the connection. | Defect | The connection is dropped with no response and counted in `kdc_proxy_http_dropped_connections_total`. A missing or wrong length prefix is malformed (2.2.2-1). Only AS-REQ, TGS-REQ and AP-REQ are recognised, so a KPASSWD-REQ is wrongly dropped as malformed ([#101](https://github.com/andrewheberle/kdcproxy/issues/101)). | `TestHandlerDrops/3.2.5.1-1/`<br>`TestRecovery` (cmd/kdcproxy) |
+| 3.2.5.1-1 | Validate that `kerb-message` is a well-formed Kerberos message, otherwise drop the connection. | Conforms | The connection is dropped with no response and counted in `kdc_proxy_http_dropped_connections_total`. A missing or wrong length prefix is malformed (2.2.2-1). AS-REQ, TGS-REQ and password change requests (versions `0x0001` and `0xff80`, with every length checked) are recognised; anything else, including a bare AP-REQ, is malformed. | `TestHandlerDrops/3.2.5.1-1/`<br>`TestRecovery` (cmd/kdcproxy) |
 | 3.2.5.1-2 | If `target-domain` is absent, return ERROR_BAD_FORMAT. | Conforms | Returns 400. | `TestHandlerRejects/3.2.5.1-2/missing_target_domain` |
 | 3.2.5.1-3 | Locate the KDC via the equivalent of `DsrGetDcNameEx2`, with the DC locator hint as flags (G and H if absent, plus U if FAST-armored). | Deviates (by design) | KDCs are located via DNS SRV or krb5.conf; the DC locator hint is ignored. See [ADR-0002](adr/0002-dns-srv-instead-of-dc-locator.md). | `TestKrb5Locator/3.2.5.1-3/` |
 | 3.2.5.1-4 | Use the address of the located DC. | Conforms | Uses the addresses returned by the lookup in 3.2.5.1-3. | `TestHandlerForwards/3.2.5.1-5/` |
-| 3.2.5.1-5 | Send `kerb-message` to the KDC. | Defect | UDP sends without the length prefix and TCP with it, which is correct. A UDP reply is read as one datagram. If there is no UDP reply, the request is retried over TCP. KPASSWD-REQ goes to the KDC rather than the kpasswd service ([#101](https://github.com/andrewheberle/kdcproxy/issues/101)). | `TestHandlerForwards/3.2.5.1-5/`<br>`TestHandlerForwards/4.1/` |
+| 3.2.5.1-5 | Send `kerb-message` to the KDC. | Conforms | UDP sends without the length prefix and TCP with it. A UDP reply is read as one datagram. If there is no UDP reply, the request is retried over TCP. Password change requests go to a kpasswd server, found through the AD `_kpasswd` SRV records or krb5.conf, with no fallback to the KDC list ([ADR-0003](adr/0003-active-directory-is-the-target-kdc.md)). | `TestHandlerForwards/3.2.5.1-5/`<br>`TestHandlerForwards/4.1/`<br>`TestHandlerForwards/4.2/` |
 | 3.2.5.2-1 | Reply with a proxy message whose `kerb-message` is the Kerberos message response. | Conforms | AS-REP, TGS-REP and KRB-ERROR replies are relayed unchanged over UDP and TCP, and KRB-ERRORs are not retried against another KDC. KRB_ERR_RESPONSE_TOO_BIG over UDP moves on to the TCP KDCs (RFC 4120 §7.2.1). | `TestHandlerForwards/3.2.5.2-1/`<br>`TestHandlerForwards/4.1/` |
 | 3.2.5.2-2 | Send the reply on the same HTTP connection. | Conforms | Sent as `application/kerberos`. | `TestHandlerForwards` (every row checks Content-Type) |
 
@@ -53,13 +53,13 @@ This matrix records how the KKDCP server conforms to [MS-KKDCP] **revision 9.0 (
 | Clause | Required | Status | Notes | Tests |
 |-|-|-|-|-|
 | 4.1 | Obtain a service ticket. | Conforms | | `TestHandlerForwards/4.1/` |
-| 4.2 | Obtain a service ticket with a password change (kpasswd). | Not yet supported | [#101](https://github.com/andrewheberle/kdcproxy/issues/101) | — |
+| 4.2 | Obtain a service ticket with a password change (kpasswd). | Conforms | Password change requests are relayed to a kpasswd server over UDP or TCP. | `TestHandlerForwards/4.2/`<br>`TestKrb5Locator/3.2.5.1-3/kpasswd_from_krb5conf` |
 
 ## §5.1 Security considerations
 
 | Clause | Required | Status | Notes | Tests |
 |-|-|-|-|-|
-| 5.1-1 | Relay only valid Kerberos messages. | Conforms | Requests are validated (3.2.5.1-1). Replies must be AS-REP, TGS-REP or KRB-ERROR, and TCP replies over 128 KiB are refused before being read; otherwise the next KDC is tried. | `TestHandlerDrops/3.2.5.1-1/`<br>`TestHandlerForwards/5.1-1/`<br>`TestGetResponseLengthLimit/5.1-1/` |
+| 5.1-1 | Relay only valid Kerberos messages. | Conforms | Requests are validated (3.2.5.1-1). Replies must be AS-REP, TGS-REP or KRB-ERROR, or, for a password change request, a framed password change reply or a bare KRB-ERROR. TCP replies over 128 KiB are refused before being read. An invalid reply moves on to the next server. | `TestHandlerDrops/3.2.5.1-1/`<br>`TestHandlerForwards/5.1-1/`<br>`TestGetResponseLengthLimit/5.1-1/` |
 | 5.1-2 | Throttle messages. | Conforms | Token-bucket limit set by `--rate`; requests over it get 429. | `TestHandlerRejects/5.1-2/rate_limited` |
 | 5.1-3 | TLS client authentication, if needed, to avoid opening unauthenticated KDC access. | N/A | Optional, and not offered. If it's ever added, it should use 403, the only status clients treat specially (3.1.5.3-1). | — |
 

@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -217,6 +219,27 @@ func apRep(t *testing.T) []byte {
 	return b
 }
 
+// kpasswdMessage frames a password change request or reply:
+// message length (2) | version (2) | AP-REQ/AP-REP length (2) | ap | rest
+func kpasswdMessage(version uint16, ap, rest []byte) []byte {
+	b := make([]byte, 6, 6+len(ap)+len(rest))
+	binary.BigEndian.PutUint16(b[0:2], uint16(6+len(ap)+len(rest)))
+	binary.BigEndian.PutUint16(b[2:4], version)
+	binary.BigEndian.PutUint16(b[4:6], uint16(len(ap)))
+
+	return append(append(b, ap...), rest...)
+}
+
+// kpasswdParts returns the AP-REQ and KRB-PRIV of the latchset password change request
+func kpasswdParts(t *testing.T) (apReq, krbPriv []byte) {
+	t.Helper()
+
+	msg := fixtureKerbMessage(t, "kpasswdreq")[4:]
+	l := int(binary.BigEndian.Uint16(msg[4:6]))
+
+	return msg[6 : 6+l], msg[6+l:]
+}
+
 // withLengthPrefix adds the RFC 4120 7.2.2 length prefix
 func withLengthPrefix(b []byte) []byte {
 	return append(MarshalKerbLength(len(b)), b...)
@@ -342,6 +365,12 @@ func TestHandlerRejects(t *testing.T) {
 // to drop the connection rather than respond
 func TestHandlerDrops(t *testing.T) {
 	asReq := fixtureKerbMessage(t, "asreq1")
+	apReq, krbPriv := kpasswdParts(t)
+
+	badMessageLength := kpasswdMessage(0x0001, apReq, krbPriv)
+	binary.BigEndian.PutUint16(badMessageLength[0:2], uint16(len(badMessageLength)+1))
+	apReqPastEnd := kpasswdMessage(0x0001, apReq, krbPriv)
+	binary.BigEndian.PutUint16(apReqPastEnd[4:6], uint16(len(apReqPastEnd)))
 
 	tests := []struct {
 		clause string
@@ -356,7 +385,14 @@ func TestHandlerDrops(t *testing.T) {
 		{"2.2.2-1", "length_prefix_too_long", proxyMessage(t, append(MarshalKerbLength(len(asReq)-3), asReq[4:]...), testRealm)},
 		{"2.2.2-1", "length_prefix_only", proxyMessage(t, MarshalKerbLength(0), testRealm)},
 		{"3.2.5.1-1", "not_kerberos", proxyMessage(t, withLengthPrefix([]byte("not kerberos")), testRealm)},
-		{"3.2.5.1-1", "kpasswd_req_not_recognised", fixture(t, "kpasswdreq")},
+		{"3.2.5.1-1", "bare_ap_req", proxyMessage(t, withLengthPrefix(apReq), testRealm)},
+		{"3.2.5.1-1", "kpasswd_too_short", proxyMessage(t, withLengthPrefix([]byte{0, 5, 0, 1, 0}), testRealm)},
+		{"3.2.5.1-1", "kpasswd_bad_message_length", proxyMessage(t, withLengthPrefix(badMessageLength), testRealm)},
+		{"3.2.5.1-1", "kpasswd_bad_version", proxyMessage(t, withLengthPrefix(kpasswdMessage(0x0002, apReq, krbPriv)), testRealm)},
+		{"3.2.5.1-1", "kpasswd_ap_req_length_past_end", proxyMessage(t, withLengthPrefix(apReqPastEnd), testRealm)},
+		{"3.2.5.1-1", "kpasswd_ap_req_invalid", proxyMessage(t, withLengthPrefix(kpasswdMessage(0x0001, []byte("not an AP-REQ"), krbPriv)), testRealm)},
+		{"3.2.5.1-1", "kpasswd_krb_priv_invalid", proxyMessage(t, withLengthPrefix(kpasswdMessage(0x0001, apReq, []byte("not a KRB-PRIV"))), testRealm)},
+		{"3.2.5.1-1", "kpasswd_krb_priv_missing", proxyMessage(t, withLengthPrefix(kpasswdMessage(0x0001, apReq, nil)), testRealm)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
@@ -395,6 +431,22 @@ func TestHandlerForwards(t *testing.T) {
 	unknown := krbError(t, errorcode.KDC_ERR_C_PRINCIPAL_UNKNOWN, "")
 	tooBig := krbError(t, errorcode.KRB_ERR_RESPONSE_TOO_BIG, "")
 	garbage := []byte("not kerberos")
+
+	kpasswdReq := fixtureKerbMessage(t, "kpasswdreq")
+	apReq, krbPriv := kpasswdParts(t)
+	setPasswordReq := withLengthPrefix(kpasswdMessage(0xff80, apReq, krbPriv))
+	changed := kpasswdMessage(0x0001, apRep(t), krbPriv)
+	kpasswdErr := kpasswdMessage(0x0001, nil, reply)
+	badLength := kpasswdMessage(0x0001, apRep(t), krbPriv)
+	binary.BigEndian.PutUint16(badLength[0:2], uint16(len(badLength)-1))
+	kpasswdUDP := []locateCall{{realm: testRealm, kpasswd: true}}
+	kpasswdServers := func(replies ...[]byte) *fakeDialer {
+		d := &fakeDialer{kdcs: map[string]fakeKDC{}}
+		for i, r := range replies {
+			d.kdcs[fmt.Sprintf("udp/kpasswd%d:464", i+1)] = fakeKDC{reply: r}
+		}
+		return d
+	}
 
 	udpOnly := []locateCall{{realm: testRealm}}
 	udpThenTCP := []locateCall{{realm: testRealm}, {realm: testRealm, tcp: true}}
@@ -663,6 +715,158 @@ func TestHandlerForwards(t *testing.T) {
 			},
 		},
 		{
+			clause:     "4.2",
+			name:       "change_password",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464"}},
+			dialer:     kpasswdServers(changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent:   []sent{{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]}},
+		},
+		{
+			clause:     "4.2",
+			name:       "set_password",
+			body:       proxyMessage(t, setPasswordReq, testRealm),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464"}},
+			dialer:     kpasswdServers(changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent:   []sent{{network: "udp", addr: "kpasswd1:464", data: setPasswordReq[4:]}},
+		},
+		{
+			clause:     "4.2",
+			name:       "change_password_over_tcp",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{tcp: []string{"kpasswd1:464"}},
+			dialer:     &fakeDialer{kdcs: map[string]fakeKDC{"tcp/kpasswd1:464": {reply: changed}}},
+			setup:      forceTCP,
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: []locateCall{{realm: testRealm, tcp: true, kpasswd: true}},
+			wantSent:   []sent{{network: "tcp", addr: "kpasswd1:464", data: kpasswdReq}},
+		},
+		{
+			clause:     "4.2",
+			name:       "framed_krb_error_relayed",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464"}},
+			dialer:     kpasswdServers(kpasswdErr),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(kpasswdErr),
+			wantLocate: kpasswdUDP,
+			wantSent:   []sent{{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]}},
+		},
+		{
+			clause:     "4.2",
+			name:       "bare_krb_error_relayed",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464"}},
+			dialer:     kpasswdServers(reply),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(reply),
+			wantLocate: kpasswdUDP,
+			wantSent:   []sent{{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]}},
+		},
+		{
+			clause:     "4.2",
+			name:       "no_kpasswd_server",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{err: errors.New("no kpasswd SRV records")},
+			dialer:     &fakeDialer{},
+			wantStatus: http.StatusServiceUnavailable,
+			wantLocate: []locateCall{{realm: testRealm, kpasswd: true}, {realm: testRealm, tcp: true, kpasswd: true}},
+		},
+		{
+			clause:     "5.1-1",
+			name:       "kpasswd_reply_bad_version",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464", "kpasswd2:464"}},
+			dialer:     kpasswdServers(kpasswdMessage(0xff80, apRep(t), krbPriv), changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent: []sent{
+				{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]},
+				{network: "udp", addr: "kpasswd2:464", data: kpasswdReq[4:]},
+			},
+		},
+		{
+			clause:     "5.1-1",
+			name:       "kpasswd_reply_bad_message_length",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464", "kpasswd2:464"}},
+			dialer:     kpasswdServers(badLength, changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent: []sent{
+				{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]},
+				{network: "udp", addr: "kpasswd2:464", data: kpasswdReq[4:]},
+			},
+		},
+		{
+			clause:     "5.1-1",
+			name:       "kpasswd_reply_ap_rep_truncated",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464", "kpasswd2:464"}},
+			dialer:     kpasswdServers(kpasswdMessage(0x0001, apRep(t)[:10], krbPriv), changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent: []sent{
+				{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]},
+				{network: "udp", addr: "kpasswd2:464", data: kpasswdReq[4:]},
+			},
+		},
+		{
+			clause:     "5.1-1",
+			name:       "kpasswd_reply_short",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464", "kpasswd2:464"}},
+			dialer:     kpasswdServers([]byte{0, 5, 0, 1, 0}, changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent: []sent{
+				{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]},
+				{network: "udp", addr: "kpasswd2:464", data: kpasswdReq[4:]},
+			},
+		},
+		{
+			clause:     "5.1-1",
+			name:       "kdc_reply_to_kpasswd_req_not_relayed",
+			body:       fixture(t, "kpasswdreq"),
+			locator:    &fakeLocator{udp: []string{"kpasswd1:464", "kpasswd2:464"}},
+			dialer:     kpasswdServers(asRep(t), changed),
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(changed),
+			wantLocate: kpasswdUDP,
+			wantSent: []sent{
+				{network: "udp", addr: "kpasswd1:464", data: kpasswdReq[4:]},
+				{network: "udp", addr: "kpasswd2:464", data: kpasswdReq[4:]},
+			},
+		},
+		{
+			clause:  "5.1-1",
+			name:    "kpasswd_reply_to_as_req_not_relayed",
+			body:    fixture(t, "asreq1"),
+			locator: &fakeLocator{udp: []string{"kdc1:88", "kdc2:88"}},
+			dialer: &fakeDialer{kdcs: map[string]fakeKDC{
+				"udp/kdc1:88": {reply: changed},
+				"udp/kdc2:88": {reply: fromKDC2},
+			}},
+			wantStatus: http.StatusOK,
+			wantReply:  withLengthPrefix(fromKDC2),
+			wantLocate: udpOnly,
+			wantSent: []sent{
+				{network: "udp", addr: "kdc1:88", data: asReq[4:]},
+				{network: "udp", addr: "kdc2:88", data: asReq[4:]},
+			},
+		},
+		{
 			clause:     "5.1-1",
 			name:       "no_valid_reply",
 			body:       fixture(t, "asreq1"),
@@ -834,7 +1038,7 @@ func TestGetResponseLengthLimit(t *testing.T) {
 		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
 			conn := &prefixOnlyConn{prefix: MarshalKerbLength(tt.length)}
 
-			if _, err := getresponse(conn); err == nil {
+			if _, err := getresponse(conn, validReply); err == nil {
 				t.Errorf("getresponse() error = nil, want error")
 			}
 			if conn.bodyRead != tt.wantBodyRead {
