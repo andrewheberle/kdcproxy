@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.6.0](https://github.com/andrewheberle/kdcproxy/compare/v1.5.0...v1.6.0) (2026-10-23)
+
+
+### Features
+
+* **proxy:** relay password change requests to kpasswd servers ([#118](https://github.com/andrewheberle/kdcproxy/issues/118)) ([f54b04e](https://github.com/andrewheberle/kdcproxy/commit/f54b04e6770d8efef168b44cceab3c8ec1b66307))
+
+
+### Bug Fixes
+
+* log dropped connections as dropped rather than 200 OK ([#123](https://github.com/andrewheberle/kdcproxy/issues/123)) ([486b3af](https://github.com/andrewheberle/kdcproxy/commit/486b3afb1114b0e9ba3b2d088dae2f3089c76751))
+* **metrics:** ensure successful request is counted properly ([#114](https://github.com/andrewheberle/kdcproxy/issues/114)) ([d23237a](https://github.com/andrewheberle/kdcproxy/commit/d23237a76b31bc6d7a195b7b11190fe334483f2d))
+* **metrics:** label kdc_proxy_kerberos_requests_total with the protocol used ([#115](https://github.com/andrewheberle/kdcproxy/issues/115)) ([329dc0d](https://github.com/andrewheberle/kdcproxy/commit/329dc0dd03b085654a49c804faa42f60ab864228))
+* **proxy:** drop the connection on a malformed Kerberos message ([#112](https://github.com/andrewheberle/kdcproxy/issues/112)) ([5913abe](https://github.com/andrewheberle/kdcproxy/commit/5913abe497a605c27ef95230ac05299c63a9e5fa))
+* **proxy:** reject kerb-message with a short or mismatched length prefix ([#110](https://github.com/andrewheberle/kdcproxy/issues/110)) ([3a5f164](https://github.com/andrewheberle/kdcproxy/commit/3a5f16400a45447edc6e431b66685cb14bf89fc0)), closes [#96](https://github.com/andrewheberle/kdcproxy/issues/96)
+* **proxy:** relay KRB-ERROR replies and validate KDC replies on both transports ([#113](https://github.com/andrewheberle/kdcproxy/issues/113)) ([18b4b4b](https://github.com/andrewheberle/kdcproxy/commit/18b4b4b57b4cecce80375ab828cff37a6633f038))
+* **proxy:** route on target-domain and reject proxy messages without it ([#108](https://github.com/andrewheberle/kdcproxy/issues/108)) ([28e68fa](https://github.com/andrewheberle/kdcproxy/commit/28e68fa48236d2fd0016abc9cd62063cf05d8fcf)), closes [#99](https://github.com/andrewheberle/kdcproxy/issues/99) [#100](https://github.com/andrewheberle/kdcproxy/issues/100)
+* serve TLS with the configured certificate ([#121](https://github.com/andrewheberle/kdcproxy/issues/121)) ([fd87887](https://github.com/andrewheberle/kdcproxy/commit/fd87887f92c20b58dc2ad33a32be16f13fb77306))
+
 ## [1.5.0](https://github.com/andrewheberle/kdcproxy/compare/v1.4.0...v1.5.0) (2026-10-23)
 
 
