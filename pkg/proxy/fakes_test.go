@@ -40,9 +40,12 @@ func (l *fakeLocator) locate(_ context.Context, realm string, tcp, kpasswd bool)
 	return l.udp, nil
 }
 
-// fakeKDC is how a KDC behaves at one network/address
+// fakeKDC is how a KDC behaves at one network/address. Over TCP, raw is sent
+// as is if set, otherwise reply with its length prefix. Over UDP, a nil reply
+// means no answer.
 type fakeKDC struct {
 	reply   []byte
+	raw     []byte
 	dialErr error
 }
 
@@ -98,7 +101,11 @@ func (d *fakeDialer) DialContext(_ context.Context, network, addr string) (net.C
 		}
 		record(buf[:n])
 
-		_, _ = server.Write(append(MarshalKerbLength(len(kdc.reply)), kdc.reply...))
+		resp := kdc.raw
+		if resp == nil {
+			resp = append(MarshalKerbLength(len(kdc.reply)), kdc.reply...)
+		}
+		_, _ = server.Write(resp)
 	}()
 
 	return client, nil
@@ -130,7 +137,7 @@ func (c *fakeUDPConn) Read(b []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.written || c.delivered {
+	if !c.written || c.delivered || c.reply == nil {
 		return 0, os.ErrDeadlineExceeded
 	}
 	c.delivered = true
