@@ -3,6 +3,7 @@
 [![Godoc](https://img.shields.io/badge/go-documentation-blue.svg?style=flat)](https://godoc.org/github.com/andrewheberle/kdcproxy)
 [![tag](https://img.shields.io/github/v/tag/andrewheberle/kdcproxy)](https://github.com/andrewheberle/kdcproxy/-/tags)
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue)](https://github.com/andrewheberle/kdcproxy/-/blob/main/LICENSE)
+[![codecov](https://codecov.io/gh/andrewheberle/kdcproxy/graph/badge.svg?token=9KGUAZO4Q8)](https://codecov.io/gh/andrewheberle/kdcproxy)
 
 This is a Go based KDC Proxy designed for use against Active Directory.
 
