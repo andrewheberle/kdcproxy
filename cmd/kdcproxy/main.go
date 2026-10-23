@@ -63,14 +63,6 @@ func main() {
 	handler := recovery(logger)(mux)
 	handler = sloghttp.New(logger)(handler)
 
-	// set up server
-	srv := http.Server{
-		Addr:         config.String("listen"),
-		ReadTimeout:  time.Second * 30,
-		WriteTimeout: time.Second * 30,
-		Handler:      handler,
-	}
-
 	// run group
 	g := run.Group{}
 
@@ -89,6 +81,9 @@ func main() {
 			logger.Error("unable to read server certificate", "error", err)
 			os.Exit(1)
 		}
+
+		// set up server
+		srv := newServer(config.String("listen"), handler, certinel)
 
 		// add certinel
 		g.Add(func() error {
@@ -111,6 +106,9 @@ func main() {
 	} else {
 		// logging about command line
 		logger.Info("setting up server")
+
+		// set up server
+		srv := newServer(config.String("listen"), handler, nil)
 
 		// add non-TLS enabled server
 		g.Add(func() error {
