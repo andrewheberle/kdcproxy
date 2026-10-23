@@ -125,7 +125,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	// check rate limit to avoid DDoS of KDC
 	if !k.limiter.Allow() {
@@ -169,7 +169,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	httpResp.WithLabelValues(http.StatusText(http.StatusOK))
 
 	// send back to client
-	w.Write(reply)
+	func() { _, _ = w.Write(reply) }()
 }
 
 func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
@@ -205,7 +205,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			if err != nil {
 				continue
 			}
-			conn.SetDeadline(time.Now().Add(timeout))
+			_ = conn.SetDeadline(time.Now().Add(timeout))
 
 			req := msg.KerbMessage
 			// for udp trim off length
@@ -216,13 +216,13 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			// send message
 			n, err := conn.Write(req)
 			if err != nil {
-				conn.Close()
+				_ = conn.Close()
 				continue
 			}
 
 			// check that all the data was sent
 			if n != len(req) {
-				conn.Close()
+				_ = conn.Close()
 				continue
 			}
 
@@ -286,7 +286,7 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 
 func getresponse(conn net.Conn) ([]byte, error) {
 	// close connection once done
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// handle udp and tcp responses differently
 	if conn.LocalAddr().Network() == protoUdp {

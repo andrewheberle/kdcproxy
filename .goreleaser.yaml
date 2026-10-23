@@ -1,0 +1,92 @@
+project_name: kdcproxy
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kdcproxy
+    binary: kdcproxy
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    main: ./cmd/kdcproxy
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    tags:
+      - netgo
+    ldflags:
+      - -s -w -X main.Version={{ .Version }}
+
+gomod:
+  proxy: true
+
+# Release notes and CHANGELOG.md are written by release-please, which also
+# creates the GitHub release that GoReleaser adds the artifacts to
+changelog:
+  disable: true
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  mode: keep-existing
+  draft: false
+  make_latest: true
+  replace_existing_artifacts: true
+  prerelease: auto
+  use_existing_draft: true
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+sboms:
+  - artifacts: binary
+    disable: false
+
+dockers_v2:
+  - images:
+      - "ghcr.io/andrewheberle/kdcproxy"
+    ids:
+      - kdcproxy
+    tags:
+      - "v{{ .Version }}"
+      - "{{ if not .IsSnapshot }}latest{{ end }}"
+    sbom: true
+    disable: false
+    platforms:
+      - linux/amd64
+    labels:
+      "org.opencontainers.image.description": "This is a Go based KDC Proxy designed for use against Active Directory."
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.name": "{{ .ProjectName }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.source": "{{ .GitURL }}"
+    annotations:
+      "org.opencontainers.image.description": "This is a Go based KDC Proxy designed for use against Active Directory."
+
+docker_digest:
+  name_template: "digests.txt"
+
+docker_signs:
+  - cmd: cosign
+    output: true
+    args:
+      - "sign"
+      - "${artifact}@${digest}"
+      - "--yes"
