@@ -12,6 +12,11 @@
       "semanticCommitType": "fix",
       "schedule": ["before 6am on monday"],
       "automerge": true
+    },
+    {
+      "description": "Integration test images are not shipped, so their updates must not trigger a release",
+      "matchFileNames": ["test/integration/**"],
+      "semanticCommitType": "chore"
     }
   ]
 }
