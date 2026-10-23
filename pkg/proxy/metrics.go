@@ -18,6 +18,10 @@ var (
 		Name: "kdc_proxy_http_responses_total",
 		Help: "The total number of HTTP responses returned",
 	}, []string{"code"})
+	httpDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kdc_proxy_http_dropped_connections_total",
+		Help: "The total number of HTTP connections dropped without a response",
+	}, []string{"reason"})
 	httpRespTimeHistogram = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "kdc_proxy_http_request_duration_seconds",
@@ -26,6 +30,15 @@ var (
 		},
 	)
 )
+
+// reasonMalformedKerberosMessage is the httpDropped reason for a malformed
+// proxy message or Kerberos message (MS-KKDCP 3.2.5.1-1)
+const reasonMalformedKerberosMessage = "malformed_kerberos_message"
+
+func init() {
+	// export the series before the first drop
+	httpDropped.WithLabelValues(reasonMalformedKerberosMessage)
+}
 
 // Metrics for Kerberos side
 var (

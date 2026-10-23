@@ -199,9 +199,9 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// decode the message
 	msg, err := k.decode(data)
 	if err != nil {
-		httpResp.WithLabelValues(http.StatusText(http.StatusBadRequest)).Inc()
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
+		// drop the connection without a response (MS-KKDCP 3.2.5.1-1)
+		httpDropped.WithLabelValues(reasonMalformedKerberosMessage).Inc()
+		panic(http.ErrAbortHandler)
 	}
 
 	// fail if no target-domain is specified (MS-KKDCP 3.2.5.1-2)
