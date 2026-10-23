@@ -316,6 +316,15 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
+	// make sure the length prefix matches the Kerberos message (RFC 4120 7.2.2)
+	length, err := UnmarshalKerbLength(m.KerbMessage)
+	if err != nil {
+		return nil, fmt.Errorf("reading length prefix: %w", err)
+	}
+	if length != len(m.KerbMessage)-4 {
+		return nil, fmt.Errorf("length prefix %d does not match message length %d", length, len(m.KerbMessage)-4)
+	}
+
 	// the target-domain from the client is used for routing, so this only
 	// validates the Kerberos message
 	if !validRequest(m.KerbMessage[4:]) {
