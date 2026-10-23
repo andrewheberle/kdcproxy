@@ -4,11 +4,13 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	sloghttp "github.com/samber/slog-http"
 )
 
 // recovery recovers panics from next and responds with a 500, except for
-// http.ErrAbortHandler, which is re-panicked so net/http drops the connection.
-// sloghttp.Recovery swallows http.ErrAbortHandler, so it cannot be used.
+// http.ErrAbortHandler, which is logged and re-panicked so net/http drops the
+// connection. sloghttp.Recovery swallows http.ErrAbortHandler, so it cannot be used.
 func recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -18,6 +20,15 @@ func recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 					return
 				}
 				if err == http.ErrAbortHandler {
+					markDropped(r)
+					logger.LogAttrs(r.Context(), slog.LevelWarn, "connection dropped",
+						slog.String("id", sloghttp.GetRequestID(r)),
+						slog.Group("request",
+							slog.String("method", r.Method),
+							slog.String("path", r.URL.Path),
+							slog.String("ip", r.RemoteAddr),
+						),
+					)
 					panic(err)
 				}
 

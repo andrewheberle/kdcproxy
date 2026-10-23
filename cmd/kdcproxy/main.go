@@ -11,7 +11,6 @@ import (
 	"github.com/andrewheberle/kdcproxy/pkg/proxy"
 	"github.com/cloudflare/certinel/fswatcher"
 	"github.com/oklog/run"
-	sloghttp "github.com/samber/slog-http"
 	"github.com/spf13/pflag"
 )
 
@@ -60,8 +59,7 @@ func main() {
 	mux.Handle("/metrics", k.Metrics())
 
 	// set up logged handler
-	handler := recovery(logger)(mux)
-	handler = sloghttp.New(logger)(handler)
+	handler := newHandler(logger, mux)
 
 	// run group
 	g := run.Group{}
