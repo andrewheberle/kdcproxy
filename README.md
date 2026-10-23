@@ -24,7 +24,10 @@ go install github.com/andrewheberle/kdcproxy/cmd/kdcproxy@v1.6.0 # x-release-ple
 docker run -p 8080:8080 ghcr.io/andrewheberle/kdcproxy:v1.6.0 # x-release-please-version
 ```
 
-To run via HTTPS:
+The MS-KKDCP specification requires access via HTTPS so the above example assumes
+an upstream reverse proxy/load balancer is handling TLS termination.
+
+To enable TLS directly:
 
 ```sh
 docker run -p 8443:8080 \
@@ -33,6 +36,8 @@ docker run -p 8443:8080 \
     -v /path/to/certificates:/ssl:ro \
     ghcr.io/andrewheberle/kdcproxy:v1.6.0 # x-release-please-version
 ```
+
+The service will pick up certificate/key updates on disk.
 
 # Configuration
 
@@ -52,7 +57,7 @@ The application supports the following options:
 
 It is optional to provide a MIT krb5.conf configuration file. Without this, the service defaults to using DNS to look up the KDC's for the realm to send requests.
 
-In most cases, assuming DNS resolution is working and the required DNS SRV records are in place, this should not be required.
+In most cases, assuming DNS resolution is working and the required DNS SRV records are in place, providing a krb5.conf file should not be required.
 
 # Specifications
 
