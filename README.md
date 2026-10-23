@@ -60,6 +60,8 @@ https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-kkdcp/5bcebb8d-
 
 Conformance to the specification is tracked clause by clause in [docs/spec-conformance.md](docs/spec-conformance.md), including any deliberate deviations and known defects.
 
+Clients must send the `target-domain` field in every proxy message, as the specification requires. It decides which realm the request is routed to, and requests without it are rejected with HTTP 400. Windows and MIT krb5 clients send it.
+
 # Credits
 
 This was initially based on the KDC Proxy implementation here:

@@ -237,6 +237,13 @@ func TestHandlerRejects(t *testing.T) {
 			wantContentType: "text/plain; charset=utf-8",
 		},
 		{
+			clause:          "3.2.5.1-2",
+			name:            "missing_target_domain",
+			body:            proxyMessage(t, asReq, ""),
+			wantStatus:      http.StatusBadRequest,
+			wantContentType: "text/plain; charset=utf-8",
+		},
+		{
 			clause:          "5.1-2",
 			name:            "rate_limited",
 			body:            proxyMessage(t, asReq, testRealm),
@@ -376,38 +383,26 @@ func TestHandlerForwards(t *testing.T) {
 		},
 		{
 			clause:     "2.2.2-2",
-			name:       "target_domain_ignored",
+			name:       "routed_by_target_domain",
 			body:       proxyMessage(t, asReq, "OTHER.REALM"),
 			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
 			dialer:     oneKDC(reply),
 			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
+			wantLocate: []locateCall{{realm: "OTHER.REALM", tcp: true}},
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
 		},
 		{
 			clause:     "2.2.2-3",
-			name:       "target_domain_case_not_normalised",
+			name:       "target_domain_located_as_sent",
 			body:       proxyMessage(t, asReq, "freeipa.local"),
 			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
 			dialer:     oneKDC(reply),
 			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
-			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
-		},
-		{
-			clause:     "3.2.5.1-2",
-			name:       "missing_target_domain_accepted",
-			body:       proxyMessage(t, asReq, ""),
-			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
-			dialer:     oneKDC(reply),
-			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
-			wantStatus: http.StatusOK,
-			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
+			wantLocate: []locateCall{{realm: "freeipa.local", tcp: true}},
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
 		},
 		{
@@ -541,6 +536,8 @@ func TestKrb5Locator(t *testing.T) {
 		{"3.2.5.1-3", "kdcs_from_krb5conf", testRealm, false, []string{"kdc1.freeipa.local:88", "kdc2.freeipa.local:88"}, false},
 		{"3.2.5.1-3", "kpasswd_from_krb5conf", testRealm, true, []string{"kpasswd.freeipa.local:464"}, false},
 		{"3.2.5.1-3", "unknown_realm", "OTHER.REALM", false, nil, true},
+		{"2.2.2-3", "kdcs_realm_case_insensitive", "freeipa.local", false, []string{"kdc1.freeipa.local:88", "kdc2.freeipa.local:88"}, false},
+		{"2.2.2-3", "kpasswd_realm_case_insensitive", "FreeIPA.Local", true, []string{"kpasswd.freeipa.local:464"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
@@ -553,6 +550,42 @@ func TestKrb5Locator(t *testing.T) {
 			slices.Sort(got)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("locate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestKdcProxyMsgEncoding checks KdcProxyMsg against proxy messages from real
+// KKDCP clients, so the struct cannot drift from the wire format unnoticed
+func TestKdcProxyMsgEncoding(t *testing.T) {
+	tests := []struct {
+		clause  string
+		name    string
+		fixture string
+	}{
+		{"2.2.2-2", "as_req", "asreq1"},
+		{"2.2.2-2", "as_req_preauth", "asreq2"},
+		{"2.2.2-2", "tgs_req", "tgsreq"},
+		{"2.2.2-2", "kpasswd_req", "kpasswdreq"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
+			b := fixture(t, tt.fixture)
+
+			var m KdcProxyMsg
+			if _, err := asn1.Unmarshal(b, &m); err != nil {
+				t.Fatalf("asn1.Unmarshal() error = %v", err)
+			}
+			if m.TargetDomain != testRealm {
+				t.Errorf("TargetDomain = %q, want %q", m.TargetDomain, testRealm)
+			}
+
+			got, err := asn1.Marshal(m)
+			if err != nil {
+				t.Fatalf("asn1.Marshal() error = %v", err)
+			}
+			if !bytes.Equal(got, b) {
+				t.Errorf("asn1.Marshal() = %x, want %x", got, b)
 			}
 		})
 	}

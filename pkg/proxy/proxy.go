@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jcmturner/gofork/encoding/asn1"
@@ -29,8 +30,8 @@ const DefaultRateLimit = 10
 // KdcProxyMsg represents a KDC_PROXY_MESSAGE as per https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-kkdcp/5778aff5-b182-4b97-a970-29c7f911eef2
 type KdcProxyMsg struct {
 	KerbMessage   []byte `asn1:"tag:0,explicit"`
-	TargetDomain  string `asn1:"tag:1,optional,generalstring"`
-	DcLocatorHint int    `asn1:"tag:2,optional"`
+	TargetDomain  string `asn1:"tag:1,explicit,optional,generalstring"`
+	DcLocatorHint int    `asn1:"tag:2,explicit,optional"`
 }
 
 // kdcLocator finds the addresses of the KDCs (or kpasswd servers) for a realm
@@ -55,7 +56,7 @@ func (l *krb5Locator) locate(_ context.Context, realm string, tcp, kpasswd bool)
 		lookup = l.config.GetKpasswdServers
 	}
 
-	_, servers, err := lookup(realm, tcp)
+	_, servers, err := lookup(l.realm(realm), tcp)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +74,18 @@ func (l *krb5Locator) locate(_ context.Context, realm string, tcp, kpasswd bool)
 	}
 
 	return addrs, nil
+}
+
+// realm returns the spelling of realm used in the krb5.conf, as realms are
+// not case-sensitive (MS-KKDCP 2.2.2). DNS lookups are already case-insensitive.
+func (l *krb5Locator) realm(realm string) string {
+	for _, r := range l.config.Realms {
+		if strings.EqualFold(r.Realm, realm) {
+			return r.Realm
+		}
+	}
+
+	return realm
 }
 
 // KerberosProxy is a KDC Proxy
@@ -191,7 +204,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// fail if no realm is specified
+	// fail if no target-domain is specified (MS-KKDCP 3.2.5.1-2)
 	if msg.TargetDomain == "" {
 		httpResp.WithLabelValues(http.StatusText(http.StatusBadRequest)).Inc()
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -303,34 +316,35 @@ func (k *KerberosProxy) decode(data []byte) (*KdcProxyMsg, error) {
 		return nil, fmt.Errorf("trailing data in request")
 	}
 
-	// is it a AS_REQ
+	// the target-domain from the client is used for routing, so this only
+	// validates the Kerberos message
+	if !validRequest(m.KerbMessage[4:]) {
+		return nil, fmt.Errorf("message was not valid")
+	}
+
+	return &m, nil
+}
+
+func validRequest(msg []byte) bool {
+	// AS_REQ
 	asReq := messages.ASReq{}
-	if err := asReq.Unmarshal(m.KerbMessage[4:]); err == nil {
-		return &KdcProxyMsg{
-			KerbMessage:  m.KerbMessage,
-			TargetDomain: asReq.ReqBody.Realm,
-		}, nil
+	if err := asReq.Unmarshal(msg); err == nil {
+		return true
 	}
 
 	// TGS_REQ
 	tgsReq := messages.TGSReq{}
-	if err := tgsReq.Unmarshal(m.KerbMessage[4:]); err == nil {
-		return &KdcProxyMsg{
-			KerbMessage:  m.KerbMessage,
-			TargetDomain: tgsReq.ReqBody.Realm,
-		}, nil
+	if err := tgsReq.Unmarshal(msg); err == nil {
+		return true
 	}
 
 	// AP_REQ
 	apReq := messages.APReq{}
-	if err := apReq.Unmarshal(m.KerbMessage[4:]); err == nil {
-		return &KdcProxyMsg{
-			KerbMessage:  m.KerbMessage,
-			TargetDomain: apReq.Ticket.Realm,
-		}, nil
+	if err := apReq.Unmarshal(msg); err == nil {
+		return true
 	}
 
-	return nil, fmt.Errorf("message was not valid")
+	return false
 }
 
 func getresponse(conn net.Conn) ([]byte, error) {
