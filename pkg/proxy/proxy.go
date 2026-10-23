@@ -267,7 +267,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, 
 		// try each kdc
 		for _, kdc := range kdcs {
 			// metrics
-			kerbReqs.WithLabelValues("proto").Inc()
+			kerbReqs.WithLabelValues(proto).Inc()
 
 			// connect to kdc
 			conn, err := k.dialer.DialContext(ctx, proto, kdc)
