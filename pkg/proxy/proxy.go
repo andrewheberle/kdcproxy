@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/jcmturner/gofork/encoding/asn1"
@@ -31,12 +33,56 @@ type KdcProxyMsg struct {
 	DcLocatorHint int    `asn1:"tag:2,optional"`
 }
 
+// kdcLocator finds the addresses of the KDCs (or kpasswd servers) for a realm
+type kdcLocator interface {
+	locate(ctx context.Context, realm string, tcp, kpasswd bool) ([]string, error)
+}
+
+// dialer connects to a KDC
+type dialer interface {
+	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// krb5Locator locates KDCs using a krb5.conf or DNS SRV lookups
+type krb5Locator struct {
+	config *krb5config.Config
+}
+
+// locate returns the addresses of the KDCs for realm in order of preference
+func (l *krb5Locator) locate(_ context.Context, realm string, tcp, kpasswd bool) ([]string, error) {
+	lookup := l.config.GetKDCs
+	if kpasswd {
+		lookup = l.config.GetKpasswdServers
+	}
+
+	_, servers, err := lookup(realm, tcp)
+	if err != nil {
+		return nil, err
+	}
+
+	// order by preference
+	keys := make([]int, 0, len(servers))
+	for key := range servers {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+
+	addrs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		addrs = append(addrs, servers[key])
+	}
+
+	return addrs, nil
+}
+
 // KerberosProxy is a KDC Proxy
 type KerberosProxy struct {
 	config string
 
 	krb5Config *krb5config.Config
 	limiter    *rate.Limiter
+	locator    kdcLocator
+	dialer     dialer
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
@@ -65,6 +111,9 @@ func InitKdcProxy(opts ...ProxyOption) (*KerberosProxy, error) {
 
 		kp.krb5Config = cfg
 	}
+
+	kp.locator = &krb5Locator{config: kp.krb5Config}
+	kp.dialer = &net.Dialer{}
 
 	return kp, nil
 }
@@ -150,7 +199,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// forward to kdc(s)
-	resp, err := k.forward(msg)
+	resp, err := k.forward(r.Context(), msg)
 	if err != nil {
 		httpResp.WithLabelValues(http.StatusText(http.StatusServiceUnavailable)).Inc()
 		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
@@ -172,7 +221,7 @@ func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	func() { _, _ = w.Write(reply) }()
 }
 
-func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
+func (k *KerberosProxy) forward(ctx context.Context, msg *KdcProxyMsg) ([]byte, error) {
 	// time forward process for metrics
 	start := time.Now()
 	defer func() {
@@ -190,8 +239,8 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 	// try protocol options
 	for _, proto := range protocols {
 		// get kdcs
-		c, kdcs, err := k.krb5Config.GetKDCs(msg.TargetDomain, proto == protoTcp)
-		if err != nil || c < 1 {
+		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, proto == protoTcp, false)
+		if err != nil || len(kdcs) < 1 {
 			continue
 		}
 
@@ -201,7 +250,7 @@ func (k *KerberosProxy) forward(msg *KdcProxyMsg) ([]byte, error) {
 			kerbReqs.WithLabelValues("proto").Inc()
 
 			// connect to kdc
-			conn, err := net.Dial(proto, kdc)
+			conn, err := k.dialer.DialContext(ctx, proto, kdc)
 			if err != nil {
 				continue
 			}
