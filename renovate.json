@@ -1,6 +1,17 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    ":semanticCommits"
+    ],
+  "packageRules": [
+    {
+      "description": "Base image updates ship as patch releases; see docs/adr/0001",
+      "matchManagers": ["dockerfile"],
+      "matchDepTypes": ["final"],
+      "semanticCommitType": "fix",
+      "schedule": ["before 6am on monday"],
+      "automerge": true
+    }
   ]
 }

@@ -2,100 +2,92 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/andrewheberle/configger"
 	"github.com/andrewheberle/kdcproxy/pkg/proxy"
 	"github.com/cloudflare/certinel/fswatcher"
-	"github.com/justinas/alice"
 	"github.com/oklog/run"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/diode"
-	"github.com/rs/zerolog/hlog"
+	sloghttp "github.com/samber/slog-http"
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 )
 
 func main() {
 	// command line flags
-	pflag.String("listen", "127.0.0.1:8080", "Service listen address")
-	pflag.String("cert", "", "TLS certificate")
-	pflag.String("key", "", "TLS key")
-	pflag.String("krb5conf", "", "Path to krb5.conf")
-	pflag.Int("rate", proxy.DefaultRateLimit, "Requests per second to the KDC allowed")
-	pflag.Parse()
-
-	// viper setup
-	viper.SetEnvPrefix("kdc_proxy")
-	viper.AutomaticEnv()
-	viper.BindPFlags(pflag.CommandLine)
+	f := pflag.NewFlagSet("kdcproxy", pflag.ContinueOnError)
+	f.String("listen", "127.0.0.1:8080", "Service listen address")
+	f.String("cert", "", "TLS certificate")
+	f.String("key", "", "TLS key")
+	f.String("krb5conf", "", "Path to krb5.conf")
+	f.Int("rate", proxy.DefaultRateLimit, "Requests per second to the KDC allowed")
 
 	// logging
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	logwriter := diode.NewWriter(os.Stdout, 1000, 0, func(missed int) {
-		fmt.Printf("Dropped %d messages\n", missed)
-	})
-	logger := zerolog.New(logwriter).With().Timestamp().Logger()
+	logLevel := new(slog.LevelVar)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 
-	// set up middelware chain for logging
-	c := alice.New()
-	c = c.Append(hlog.NewHandler(logger))
-	c = c.Append(hlog.AccessHandler(func(r *http.Request, status, size int, duration time.Duration) {
-		hlog.FromRequest(r).Info().
-			Int("status", status).
-			Int("size", size).
-			Dur("duration", duration).
-			Send()
-	}))
-	c = c.Append(hlog.URLHandler("url"))
-	c = c.Append(hlog.MethodHandler("method"))
-	c = c.Append(hlog.RemoteAddrHandler("ip"))
-	c = c.Append(hlog.UserAgentHandler("user_agent"))
-	c = c.Append(hlog.RefererHandler("referer"))
-	c = c.Append(hlog.RequestIDHandler("req_id", "Request-Id"))
+	// parse flags
+	if err := f.Parse(os.Args[1:]); err != nil {
+		logger.Error("command line parsing error", "error", err)
+		os.Exit(1)
+	}
+
+	// grab config from flags and env vars
+	config, err := configger.LoadConfig(f, configger.WithoutConfigurationFile(), configger.WithEnvPrefix("kdc_proxy"))
+	if err != nil {
+		logger.Error("command line parsing error", "error", err)
+		os.Exit(1)
+	}
 
 	// set up kdc proxy
 	opts := []proxy.ProxyOption{
-		proxy.WithLimit(viper.GetInt("rate")),
+		proxy.WithLimit(config.Int("rate")),
 	}
-	if config := viper.GetString("krb5conf"); config != "" {
+	if config := config.String("krb5conf"); config != "" {
 		opts = append(opts, proxy.WithConfig(config))
 	}
 	k, err := proxy.InitKdcProxy(opts...)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("could not set up kdc proxy")
+		logger.Error("could not set up kdc proxy", "error", err)
+		os.Exit(1)
 	}
 
 	// add to http service
-	http.Handle("/KdcProxy", c.ThenFunc(k.Handler))
-	http.Handle("/metrics", k.Metrics())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/KdcProxy", k.Handler)
+	mux.Handle("/metrics", k.Metrics())
+
+	// set up logged handler
+	handler := sloghttp.Recovery(mux)
+	handler = sloghttp.New(logger)(handler)
 
 	// set up server
 	srv := http.Server{
-		Addr:         viper.GetString("listen"),
+		Addr:         config.String("listen"),
 		ReadTimeout:  time.Second * 30,
 		WriteTimeout: time.Second * 30,
+		Handler:      handler,
 	}
 
 	// run group
 	g := run.Group{}
 
 	// start server
-	if viper.GetString("cert") != "" && viper.GetString("key") != "" {
+	if config.String("cert") != "" && config.String("key") != "" {
 		// logging about command line
-		logger.Info().
-			Str("cert", viper.GetString("cert")).
-			Str("key", viper.GetString("key")).
-			Msg("setting up tls server")
+		logger.Info("setting up tls server",
+			"cert", config.String("cert"),
+			"key", config.String("key"),
+		)
 
 		certctx, certcancel := context.WithCancel(context.Background())
 
-		certinel, err := fswatcher.New(viper.GetString("cert"), viper.GetString("key"))
+		certinel, err := fswatcher.New(config.String("cert"), config.String("key"))
 		if err != nil {
-			logger.Fatal().Err(err).Msg("unable to read server certificate")
+			logger.Error("unable to read server certificate", "error", err)
+			os.Exit(1)
 		}
 
 		// add certinel
@@ -111,15 +103,14 @@ func main() {
 		}, func(err error) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				srv.Shutdown(ctx)
+				_ = srv.Shutdown(ctx)
 				cancel()
 			}()
 		})
 
 	} else {
 		// logging about command line
-		logger.Info().
-			Msg("setting up server")
+		logger.Info("setting up server")
 
 		// add non-TLS enabled server
 		g.Add(func() error {
@@ -127,7 +118,7 @@ func main() {
 		}, func(err error) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				srv.Shutdown(ctx)
+				_ = srv.Shutdown(ctx)
 				cancel()
 			}()
 		})
@@ -135,6 +126,7 @@ func main() {
 
 	// start run group
 	if err := g.Run(); err != nil {
-		logger.Fatal().Err(err).Send()
+		logger.Error("error from run group", "error", err)
+		os.Exit(1)
 	}
 }
