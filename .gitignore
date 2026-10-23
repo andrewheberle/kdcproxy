@@ -13,3 +13,5 @@
 
 # Go workspace file
 go.work
+# Integration test TLS material, generated per run
+test/integration/.run/
