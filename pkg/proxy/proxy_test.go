@@ -217,6 +217,34 @@ func TestHandlerRejects(t *testing.T) {
 		},
 		{
 			clause:          "2.2.2-1",
+			name:            "empty",
+			body:            proxyMessage(t, []byte{}, testRealm),
+			wantStatus:      http.StatusBadRequest,
+			wantContentType: "text/plain; charset=utf-8",
+		},
+		{
+			clause:          "2.2.2-1",
+			name:            "three_octets",
+			body:            proxyMessage(t, []byte{0, 0, 0}, testRealm),
+			wantStatus:      http.StatusBadRequest,
+			wantContentType: "text/plain; charset=utf-8",
+		},
+		{
+			clause:          "2.2.2-1",
+			name:            "length_prefix_too_short",
+			body:            proxyMessage(t, append(MarshalKerbLength(len(asReq)-5), asReq[4:]...), testRealm),
+			wantStatus:      http.StatusBadRequest,
+			wantContentType: "text/plain; charset=utf-8",
+		},
+		{
+			clause:          "2.2.2-1",
+			name:            "length_prefix_too_long",
+			body:            proxyMessage(t, append(MarshalKerbLength(len(asReq)-3), asReq[4:]...), testRealm),
+			wantStatus:      http.StatusBadRequest,
+			wantContentType: "text/plain; charset=utf-8",
+		},
+		{
+			clause:          "2.2.2-1",
 			name:            "length_prefix_only",
 			body:            proxyMessage(t, MarshalKerbLength(0), testRealm),
 			wantStatus:      http.StatusBadRequest,
@@ -286,40 +314,11 @@ func TestHandlerRejects(t *testing.T) {
 	}
 }
 
-// TestHandlerShortKerbMessage covers a kerb-message too short to hold its length prefix
-func TestHandlerShortKerbMessage(t *testing.T) {
-	tests := []struct {
-		clause      string
-		name        string
-		kerbMessage []byte
-	}{
-		{"2.2.2-1", "empty_panics", []byte{}},
-		{"2.2.2-1", "three_octets_panics", []byte{0, 0, 0}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
-			k := newTestProxy(t, &fakeLocator{}, &fakeDialer{})
-			r := httptest.NewRequest(http.MethodPost, "/KdcProxy", bytes.NewReader(proxyMessage(t, tt.kerbMessage, testRealm)))
-			w := httptest.NewRecorder()
-
-			defer func() {
-				if recover() == nil {
-					t.Errorf("Handler() did not panic")
-				}
-			}()
-			k.Handler(w, r)
-		})
-	}
-}
-
 // TestHandlerForwards covers requests that are forwarded to a KDC
 func TestHandlerForwards(t *testing.T) {
 	asReq := fixtureKerbMessage(t, "asreq1")
 	tgsReq := fixtureKerbMessage(t, "tgsreq")
 	reply := krbError(t)
-
-	// a length prefix one less than the real length
-	mismatched := append(MarshalKerbLength(len(asReq)-5), asReq[4:]...)
 
 	udpThenTCP := []locateCall{{realm: testRealm}, {realm: testRealm, tcp: true}}
 	oneKDC := func(reply []byte) *fakeDialer {
@@ -368,18 +367,6 @@ func TestHandlerForwards(t *testing.T) {
 				{network: "udp", addr: "kdc1:88", data: tgsReq[4:]},
 				{network: "tcp", addr: "kdc1:88", data: tgsReq},
 			},
-		},
-		{
-			clause:     "2.2.2-1",
-			name:       "length_prefix_mismatch_accepted",
-			body:       proxyMessage(t, mismatched, testRealm),
-			locator:    &fakeLocator{tcp: []string{"kdc1:88"}},
-			dialer:     oneKDC(reply),
-			setup:      func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 },
-			wantStatus: http.StatusOK,
-			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true}},
-			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: mismatched}},
 		},
 		{
 			clause:     "2.2.2-2",
