@@ -1085,32 +1085,105 @@ func TestKerberosRequestsMetric(t *testing.T) {
 	}
 }
 
-// TestHTTPResponsesMetric checks each response is counted under its status
+// TestHTTPResponsesMetric checks each response is counted once under its
+// status, and a dropped connection is counted as dropped rather than as a response
 func TestHTTPResponsesMetric(t *testing.T) {
 	reply := krbError(t, errorcode.KDC_ERR_PREAUTH_REQUIRED, "")
 
 	tests := []struct {
-		name     string
-		method   string
-		locator  *fakeLocator
-		wantCode string
+		name          string
+		method        string
+		body          []byte
+		contentLength int64
+		setup         func(*KerberosProxy)
+		locator       *fakeLocator
+		wantCode      string
+		wantDropped   bool
 	}{
-		{"ok", http.MethodPost, &fakeLocator{udp: []string{"kdc1:88"}}, http.StatusText(http.StatusOK)},
-		{"method_not_allowed", http.MethodGet, &fakeLocator{}, http.StatusText(http.StatusMethodNotAllowed)},
-		{"service_unavailable", http.MethodPost, &fakeLocator{}, http.StatusText(http.StatusServiceUnavailable)},
+		{name: "ok", locator: &fakeLocator{udp: []string{"kdc1:88"}}, wantCode: http.StatusText(http.StatusOK)},
+		{name: "method_not_allowed", method: http.MethodGet, wantCode: http.StatusText(http.StatusMethodNotAllowed)},
+		{name: "length_required", contentLength: -1, wantCode: http.StatusText(http.StatusLengthRequired)},
+		{name: "request_entity_too_large", contentLength: maxLength + 1, wantCode: http.StatusText(http.StatusRequestEntityTooLarge)},
+		{name: "too_many_requests", setup: func(k *KerberosProxy) { k.limiter = rate.NewLimiter(0, 0) }, wantCode: http.StatusText(http.StatusTooManyRequests)},
+		{name: "bad_request", body: proxyMessage(t, fixtureKerbMessage(t, "asreq1"), ""), wantCode: http.StatusText(http.StatusBadRequest)},
+		{name: "service_unavailable", wantCode: http.StatusText(http.StatusServiceUnavailable)},
+		{name: "dropped", body: []byte("not a proxy message"), wantDropped: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			k := newTestProxy(t, tt.locator, &fakeDialer{kdcs: map[string]fakeKDC{
+			locator := tt.locator
+			if locator == nil {
+				locator = &fakeLocator{}
+			}
+			k := newTestProxy(t, locator, &fakeDialer{kdcs: map[string]fakeKDC{
 				"udp/kdc1:88": {reply: reply},
 			}})
-			before := counterValue(t, httpResp.WithLabelValues(tt.wantCode))
+			if tt.setup != nil {
+				tt.setup(k)
+			}
+			method := tt.method
+			if method == "" {
+				method = http.MethodPost
+			}
+			body := tt.body
+			if body == nil {
+				body = fixture(t, "asreq1")
+			}
+			r := httptest.NewRequest(method, "/KdcProxy", bytes.NewReader(body))
+			if tt.contentLength != 0 {
+				r.ContentLength = tt.contentLength
+			}
 
-			k.Handler(httptest.NewRecorder(), httptest.NewRequest(tt.method, "/KdcProxy", bytes.NewReader(fixture(t, "asreq1"))))
+			total := responsesTotal(t)
+			code := counterValue(t, httpResp.WithLabelValues(tt.wantCode))
+			dropped := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage))
 
-			if got := counterValue(t, httpResp.WithLabelValues(tt.wantCode)) - before; got != 1 {
-				t.Errorf("responses with code %q increased by %v, want 1", tt.wantCode, got)
+			func() {
+				defer func() {
+					if got := recover(); got != nil && (!tt.wantDropped || got != http.ErrAbortHandler) {
+						panic(got)
+					}
+				}()
+				k.Handler(httptest.NewRecorder(), r)
+			}()
+
+			wantTotal, wantDropped := 1.0, 0.0
+			if tt.wantDropped {
+				wantTotal, wantDropped = 0, 1
+			}
+			if got := responsesTotal(t) - total; got != wantTotal {
+				t.Errorf("responses increased by %v in total, want %v", got, wantTotal)
+			}
+			if !tt.wantDropped {
+				if got := counterValue(t, httpResp.WithLabelValues(tt.wantCode)) - code; got != 1 {
+					t.Errorf("responses with code %q increased by %v, want 1", tt.wantCode, got)
+				}
+			}
+			if got := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage)) - dropped; got != wantDropped {
+				t.Errorf("dropped connections increased by %v, want %v", got, wantDropped)
 			}
 		})
 	}
+}
+
+// responsesTotal returns the sum of kdc_proxy_http_responses_total across all codes
+func responsesTotal(t *testing.T) float64 {
+	t.Helper()
+
+	ch := make(chan prometheus.Metric)
+	go func() {
+		httpResp.Collect(ch)
+		close(ch)
+	}()
+
+	var total float64
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("reading counter: %v", err)
+		}
+		total += d.GetCounter().GetValue()
+	}
+
+	return total
 }
