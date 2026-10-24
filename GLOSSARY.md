@@ -32,6 +32,10 @@ _Avoid_: request, packet, envelope
 The `kerb-message` payload of a proxy message: a Kerberos request or reply, including its 4-octet length prefix.
 _Avoid_: ticket, payload
 
+**KDC request**:
+A Kerberos message asking a KDC for a ticket: an AS-REQ or TGS-REQ. Its answer is a **KDC reply**: an AS-REP, TGS-REP or KRB-ERROR.
+_Avoid_: ticket request, Kerberos request
+
 **Password change request**:
 A Kerberos message asking to change or set a password (KPASSWD-REQ; the spec's KRB_CHG_PWD_REQ). Its answer is a **password change reply**.
 _Avoid_: kadmin request, change password message
