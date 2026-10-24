@@ -51,9 +51,38 @@ type KdcProxyMsg struct {
 	DcLocatorHint int    `asn1:"tag:2,explicit,optional"`
 }
 
-// kdcLocator finds the addresses of the KDCs (or kpasswd servers) for a realm
+// upstream is the kind of server a Kerberos message is relayed to
+type upstream int
+
+const (
+	// upstreamKDC is a KDC
+	upstreamKDC upstream = iota
+	// upstreamKpasswd is a kpasswd server
+	upstreamKpasswd
+)
+
+// messageKind is a kind of Kerberos message that is relayed: how to recognise
+// it, which server it goes to, and which replies are accepted from that server
+type messageKind struct {
+	validRequest func([]byte) bool
+	validReply   func([]byte) bool
+	server       upstream
+}
+
+var (
+	// kdcRequest is an AS-REQ or TGS-REQ, answered by a KDC
+	kdcRequest = &messageKind{validRequest: validRequest, validReply: validReply, server: upstreamKDC}
+	// passwordChangeRequest is answered by a kpasswd server, whose replies
+	// are framed differently to KDC replies
+	passwordChangeRequest = &messageKind{validRequest: validKpasswdRequest, validReply: validKpasswdReply, server: upstreamKpasswd}
+
+	// messageKinds are the kinds of Kerberos message relayed, in the order they are tried
+	messageKinds = []*messageKind{kdcRequest, passwordChangeRequest}
+)
+
+// kdcLocator finds the addresses of the servers of one kind for a realm
 type kdcLocator interface {
-	locate(ctx context.Context, realm string, tcp, kpasswd bool) ([]string, error)
+	locate(ctx context.Context, realm string, server upstream, network string) ([]string, error)
 }
 
 // dialer connects to a KDC
@@ -66,14 +95,14 @@ type krb5Locator struct {
 	config *krb5config.Config
 }
 
-// locate returns the addresses of the KDCs for realm in order of preference
-func (l *krb5Locator) locate(_ context.Context, realm string, tcp, kpasswd bool) ([]string, error) {
+// locate returns the addresses of the servers for realm in order of preference
+func (l *krb5Locator) locate(_ context.Context, realm string, server upstream, network string) ([]string, error) {
 	lookup := l.config.GetKDCs
-	if kpasswd {
+	if server == upstreamKpasswd {
 		lookup = l.config.GetKpasswdServers
 	}
 
-	_, servers, err := lookup(l.realm(realm), tcp)
+	_, servers, err := lookup(l.realm(realm), network == protoTcp)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +141,8 @@ type request struct {
 	// body is the Kerberos message without its length prefix
 	body []byte
 
-	// kpasswd is set for a password change request, which goes to a kpasswd server rather than a KDC
-	kpasswd bool
+	// kind is the kind of Kerberos message
+	kind *messageKind
 }
 
 // KerberosProxy is a KDC Proxy
@@ -307,12 +336,6 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 		k.metrics.kerbRespTimeHistogram.Observe(duration.Seconds())
 	}()
 
-	// password change replies are framed differently to KDC replies
-	valid := validReply
-	if msg.kpasswd {
-		valid = validKpasswdReply
-	}
-
 	udp := udpTransport{dialer: k.dialer, metrics: k.metrics}
 	tcp := tcpTransport{dialer: k.dialer, metrics: k.metrics}
 
@@ -326,7 +349,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 	// try transport options
 	for _, t := range transports {
 		// get kdcs
-		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, t.network() == protoTcp, msg.kpasswd)
+		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, msg.kind.server, t.network())
 		if err != nil || len(kdcs) < 1 {
 			continue
 		}
@@ -344,7 +367,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 			}
 
 			// validate response, trying the next kdc if it is not valid
-			if !valid(resp) {
+			if !msg.kind.validReply(resp) {
 				continue
 			}
 
@@ -381,11 +404,10 @@ func (k *KerberosProxy) decode(data []byte) (*request, error) {
 	// the target-domain from the client is used for routing, so this only
 	// validates the Kerberos message
 	body := m.KerbMessage[4:]
-	if validRequest(body) {
-		return &request{KdcProxyMsg: &m, body: body}, nil
-	}
-	if validKpasswdRequest(body) {
-		return &request{KdcProxyMsg: &m, body: body, kpasswd: true}, nil
+	for _, kind := range messageKinds {
+		if kind.validRequest(body) {
+			return &request{KdcProxyMsg: &m, body: body, kind: kind}, nil
+		}
 	}
 
 	return nil, fmt.Errorf("message was not valid")

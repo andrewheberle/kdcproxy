@@ -11,8 +11,8 @@ import (
 
 type locateCall struct {
 	realm   string
-	tcp     bool
-	kpasswd bool
+	server  upstream
+	network string
 }
 
 // fakeLocator returns fixed KDC addresses per transport and records each lookup
@@ -25,15 +25,15 @@ type fakeLocator struct {
 	calls []locateCall
 }
 
-func (l *fakeLocator) locate(_ context.Context, realm string, tcp, kpasswd bool) ([]string, error) {
+func (l *fakeLocator) locate(_ context.Context, realm string, server upstream, network string) ([]string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.calls = append(l.calls, locateCall{realm: realm, tcp: tcp, kpasswd: kpasswd})
+	l.calls = append(l.calls, locateCall{realm: realm, server: server, network: network})
 	if l.err != nil {
 		return nil, l.err
 	}
-	if tcp {
+	if network == protoTcp {
 		return l.tcp, nil
 	}
 

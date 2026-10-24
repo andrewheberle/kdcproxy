@@ -458,7 +458,7 @@ func TestHandlerForwards(t *testing.T) {
 	kpasswdErr := kpasswdMessage(0x0001, nil, reply)
 	badLength := kpasswdMessage(0x0001, apRep(t), krbPriv)
 	binary.BigEndian.PutUint16(badLength[0:2], uint16(len(badLength)-1))
-	kpasswdUDP := []locateCall{{realm: testRealm, kpasswd: true}}
+	kpasswdUDP := []locateCall{{realm: testRealm, server: upstreamKpasswd, network: protoUdp}}
 	kpasswdServers := func(replies ...[]byte) *fakeDialer {
 		d := &fakeDialer{kdcs: map[string]fakeKDC{}}
 		for i, r := range replies {
@@ -467,9 +467,9 @@ func TestHandlerForwards(t *testing.T) {
 		return d
 	}
 
-	udpOnly := []locateCall{{realm: testRealm}}
-	udpThenTCP := []locateCall{{realm: testRealm}, {realm: testRealm, tcp: true}}
-	tcpOnly := []locateCall{{realm: testRealm, tcp: true}}
+	udpOnly := []locateCall{{realm: testRealm, server: upstreamKDC, network: protoUdp}}
+	udpThenTCP := []locateCall{{realm: testRealm, server: upstreamKDC, network: protoUdp}, {realm: testRealm, server: upstreamKDC, network: protoTcp}}
+	tcpOnly := []locateCall{{realm: testRealm, server: upstreamKDC, network: protoTcp}}
 	forceTCP := func(k *KerberosProxy) { k.krb5Config.LibDefaults.UDPPreferenceLimit = 1 }
 	oneKDC := func(reply []byte) *fakeDialer {
 		return &fakeDialer{kdcs: map[string]fakeKDC{
@@ -521,7 +521,7 @@ func TestHandlerForwards(t *testing.T) {
 			setup:      forceTCP,
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: "OTHER.REALM", tcp: true}},
+			wantLocate: []locateCall{{realm: "OTHER.REALM", server: upstreamKDC, network: protoTcp}},
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
 		},
 		{
@@ -533,7 +533,7 @@ func TestHandlerForwards(t *testing.T) {
 			setup:      forceTCP,
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(reply),
-			wantLocate: []locateCall{{realm: "freeipa.local", tcp: true}},
+			wantLocate: []locateCall{{realm: "freeipa.local", server: upstreamKDC, network: protoTcp}},
 			wantSent:   []sent{{network: "tcp", addr: "kdc1:88", data: asReq}},
 		},
 		{
@@ -764,7 +764,7 @@ func TestHandlerForwards(t *testing.T) {
 			setup:      forceTCP,
 			wantStatus: http.StatusOK,
 			wantReply:  withLengthPrefix(changed),
-			wantLocate: []locateCall{{realm: testRealm, tcp: true, kpasswd: true}},
+			wantLocate: []locateCall{{realm: testRealm, server: upstreamKpasswd, network: protoTcp}},
 			wantSent:   []sent{{network: "tcp", addr: "kpasswd1:464", data: kpasswdReq}},
 		},
 		{
@@ -796,7 +796,7 @@ func TestHandlerForwards(t *testing.T) {
 			locator:    &fakeLocator{err: errors.New("no kpasswd SRV records")},
 			dialer:     &fakeDialer{},
 			wantStatus: http.StatusServiceUnavailable,
-			wantLocate: []locateCall{{realm: testRealm, kpasswd: true}, {realm: testRealm, tcp: true, kpasswd: true}},
+			wantLocate: []locateCall{{realm: testRealm, server: upstreamKpasswd, network: protoUdp}, {realm: testRealm, server: upstreamKpasswd, network: protoTcp}},
 		},
 		{
 			clause:     "5.1-1",
@@ -957,19 +957,19 @@ func TestKrb5Locator(t *testing.T) {
 		clause  string
 		name    string
 		realm   string
-		kpasswd bool
+		server  upstream
 		want    []string
 		wantErr bool
 	}{
-		{"3.2.5.1-3", "kdcs_from_krb5conf", testRealm, false, []string{"kdc1.freeipa.local:88", "kdc2.freeipa.local:88"}, false},
-		{"3.2.5.1-3", "kpasswd_from_krb5conf", testRealm, true, []string{"kpasswd.freeipa.local:464"}, false},
-		{"3.2.5.1-3", "unknown_realm", "OTHER.REALM", false, nil, true},
-		{"2.2.2-3", "kdcs_realm_case_insensitive", "freeipa.local", false, []string{"kdc1.freeipa.local:88", "kdc2.freeipa.local:88"}, false},
-		{"2.2.2-3", "kpasswd_realm_case_insensitive", "FreeIPA.Local", true, []string{"kpasswd.freeipa.local:464"}, false},
+		{"3.2.5.1-3", "kdcs_from_krb5conf", testRealm, upstreamKDC, []string{"kdc1.freeipa.local:88", "kdc2.freeipa.local:88"}, false},
+		{"3.2.5.1-3", "kpasswd_from_krb5conf", testRealm, upstreamKpasswd, []string{"kpasswd.freeipa.local:464"}, false},
+		{"3.2.5.1-3", "unknown_realm", "OTHER.REALM", upstreamKDC, nil, true},
+		{"2.2.2-3", "kdcs_realm_case_insensitive", "freeipa.local", upstreamKDC, []string{"kdc1.freeipa.local:88", "kdc2.freeipa.local:88"}, false},
+		{"2.2.2-3", "kpasswd_realm_case_insensitive", "FreeIPA.Local", upstreamKpasswd, []string{"kpasswd.freeipa.local:464"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
-			got, err := l.locate(t.Context(), tt.realm, true, tt.kpasswd)
+			got, err := l.locate(t.Context(), tt.realm, tt.server, protoTcp)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("locate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -985,6 +985,36 @@ func TestKrb5Locator(t *testing.T) {
 
 // TestKdcProxyMsgEncoding checks KdcProxyMsg against proxy messages from real
 // KKDCP clients, so the struct cannot drift from the wire format unnoticed
+// TestDecodeKind checks each Kerberos message is decoded as the right kind
+func TestDecodeKind(t *testing.T) {
+	apReq, krbPriv := kpasswdParts(t)
+
+	tests := []struct {
+		name string
+		body []byte
+		want *messageKind
+	}{
+		{"as_req", fixture(t, "asreq1"), kdcRequest},
+		{"as_req_preauth", fixture(t, "asreq2"), kdcRequest},
+		{"tgs_req", fixture(t, "tgsreq"), kdcRequest},
+		{"kpasswd_req", fixture(t, "kpasswdreq"), passwordChangeRequest},
+		{"set_password_req", proxyMessage(t, withLengthPrefix(kpasswdMessage(kpasswdVersionSetPassword, apReq, krbPriv)), testRealm), passwordChangeRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k := newTestProxy(t, &fakeLocator{}, &fakeDialer{})
+
+			got, err := k.decode(tt.body)
+			if err != nil {
+				t.Fatalf("decode() error = %v", err)
+			}
+			if got.kind != tt.want {
+				t.Errorf("decode() kind = %+v, want %+v", got.kind, tt.want)
+			}
+		})
+	}
+}
+
 func TestKdcProxyMsgEncoding(t *testing.T) {
 	tests := []struct {
 		clause  string
