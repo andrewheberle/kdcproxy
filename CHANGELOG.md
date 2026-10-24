@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/andrewheberle/kdcproxy/compare/v1.6.0...v1.7.0) (2026-10-24)
+
+
+### Features
+
+* **logging:** log requests with a built-in access log that handles dropped connections ([#130](https://github.com/andrewheberle/kdcproxy/issues/130)) ([739cae0](https://github.com/andrewheberle/kdcproxy/commit/739cae03114fea900062c8e9ba20fa372f8075a7))
+
 ## [1.6.0](https://github.com/andrewheberle/kdcproxy/compare/v1.5.0...v1.6.0) (2026-10-23)
 
 
