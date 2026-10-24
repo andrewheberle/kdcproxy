@@ -59,7 +59,7 @@ This matrix records how the KKDCP server conforms to [MS-KKDCP] **revision 9.0 (
 
 | Clause | Required | Status | Notes | Tests |
 |-|-|-|-|-|
-| 5.1-1 | Relay only valid Kerberos messages. | Conforms | Requests are validated (3.2.5.1-1). Replies must be AS-REP, TGS-REP or KRB-ERROR, or, for a password change request, a framed password change reply or a bare KRB-ERROR. TCP replies over 128 KiB are refused before being read. An invalid reply moves on to the next server. | `TestHandlerDrops/3.2.5.1-1/`<br>`TestHandlerForwards/5.1-1/`<br>`TestGetResponseLengthLimit/5.1-1/` |
+| 5.1-1 | Relay only valid Kerberos messages. | Conforms | Requests are validated (3.2.5.1-1). Replies must be AS-REP, TGS-REP or KRB-ERROR, or, for a password change request, a framed password change reply or a bare KRB-ERROR. TCP replies over 128 KiB are refused before being read. An invalid reply moves on to the next server. | `TestHandlerDrops/3.2.5.1-1/`<br>`TestHandlerForwards/5.1-1/`<br>`TestTCPTransportReplyLength/5.1-1/` |
 | 5.1-2 | Throttle messages. | Conforms | Token-bucket limit set by `--rate`; requests over it get 429. | `TestHandlerRejects/5.1-2/rate_limited` |
 | 5.1-3 | TLS client authentication, if needed, to avoid opening unauthenticated KDC access. | N/A | Optional, and not offered. If it's ever added, it should use 403, the only status clients treat specially (3.1.5.3-1). | — |
 

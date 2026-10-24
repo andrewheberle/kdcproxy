@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1016,55 +1014,6 @@ func TestKdcProxyMsgEncoding(t *testing.T) {
 			}
 			if !bytes.Equal(got, b) {
 				t.Errorf("asn1.Marshal() = %x, want %x", got, b)
-			}
-		})
-	}
-}
-
-// prefixOnlyConn is a TCP connection that sends only a length prefix and
-// records any attempt to read past it
-type prefixOnlyConn struct {
-	fakeUDPConn
-	prefix   []byte
-	bodyRead bool
-}
-
-func (c *prefixOnlyConn) Read(b []byte) (int, error) {
-	if len(c.prefix) > 0 {
-		n := copy(b, c.prefix)
-		c.prefix = c.prefix[n:]
-		return n, nil
-	}
-	c.bodyRead = true
-
-	return 0, io.EOF
-}
-
-func (c *prefixOnlyConn) LocalAddr() net.Addr { return &net.TCPAddr{} }
-
-// TestGetResponseLengthLimit checks an oversized TCP reply is refused before
-// its body is read or allocated
-func TestGetResponseLengthLimit(t *testing.T) {
-	tests := []struct {
-		clause       string
-		name         string
-		length       int
-		wantBodyRead bool
-	}{
-		{"5.1-1", "at_max", maxLength, true},
-		{"5.1-1", "over_max", maxLength + 1, false},
-		{"5.1-1", "high_bit", 1 << 31, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
-			conn := &prefixOnlyConn{prefix: MarshalKerbLength(tt.length)}
-
-			k := newTestProxy(t, &fakeLocator{}, &fakeDialer{})
-			if _, err := k.getresponse(conn, validReply); err == nil {
-				t.Errorf("getresponse() error = nil, want error")
-			}
-			if conn.bodyRead != tt.wantBodyRead {
-				t.Errorf("body read = %v, want %v", conn.bodyRead, tt.wantBodyRead)
 			}
 		})
 	}
