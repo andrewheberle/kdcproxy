@@ -85,6 +85,28 @@ func TestInitKdcProxy_WithConfig(t *testing.T) {
 	}
 }
 
+// TestNewKdcProxySharesMetrics checks proxies registered with the same registry
+// share its metrics rather than failing to register them again
+func TestNewKdcProxySharesMetrics(t *testing.T) {
+	reg := prometheus.NewRegistry()
+
+	first, err := newKdcProxy(reg)
+	if err != nil {
+		t.Fatalf("first newKdcProxy() error = %v", err)
+	}
+	second, err := newKdcProxy(reg)
+	if err != nil {
+		t.Fatalf("second newKdcProxy() error = %v", err)
+	}
+
+	if first.metrics.httpResp != second.metrics.httpResp {
+		t.Errorf("proxies have separate responses counters, want them shared")
+	}
+	if first.metrics.kerbReqs != second.metrics.kerbReqs {
+		t.Errorf("proxies have separate Kerberos requests counters, want them shared")
+	}
+}
+
 const testRealm = "FREEIPA.LOCAL"
 
 // fixture returns a proxy message captured by latchset/kdcproxy
@@ -260,9 +282,9 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 func newTestProxy(t *testing.T, locator kdcLocator, dialer dialer) *KerberosProxy {
 	t.Helper()
 
-	k, err := InitKdcProxy()
+	k, err := newKdcProxy(prometheus.NewRegistry())
 	if err != nil {
-		t.Fatalf("InitKdcProxy() error = %v", err)
+		t.Fatalf("newKdcProxy() error = %v", err)
 	}
 	k.locator = locator
 	k.dialer = dialer
@@ -401,7 +423,6 @@ func TestHandlerDrops(t *testing.T) {
 			k := newTestProxy(t, locator, dialer)
 			r := httptest.NewRequest(http.MethodPost, "/KdcProxy", bytes.NewReader(tt.body))
 			w := httptest.NewRecorder()
-			dropped := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage))
 
 			defer func() {
 				if got := recover(); got != http.ErrAbortHandler {
@@ -410,8 +431,8 @@ func TestHandlerDrops(t *testing.T) {
 				if w.Body.Len() != 0 {
 					t.Errorf("body = %q, want nothing written", w.Body.Bytes())
 				}
-				if got := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage)) - dropped; got != 1 {
-					t.Errorf("dropped connections counter increased by %v, want 1", got)
+				if got := counterValue(t, k.metrics.httpDropped.WithLabelValues(reasonMalformedKerberosMessage)); got != 1 {
+					t.Errorf("dropped connections = %v, want 1", got)
 				}
 				if len(locator.calls) != 0 || len(dialer.dials) != 0 {
 					t.Errorf("KDC contacted: locate calls %v, dials %v", locator.calls, dialer.dials)
@@ -1038,7 +1059,8 @@ func TestGetResponseLengthLimit(t *testing.T) {
 		t.Run(tt.clause+"/"+tt.name, func(t *testing.T) {
 			conn := &prefixOnlyConn{prefix: MarshalKerbLength(tt.length)}
 
-			if _, err := getresponse(conn, validReply); err == nil {
+			k := newTestProxy(t, &fakeLocator{}, &fakeDialer{})
+			if _, err := k.getresponse(conn, validReply); err == nil {
 				t.Errorf("getresponse() error = nil, want error")
 			}
 			if conn.bodyRead != tt.wantBodyRead {
@@ -1070,16 +1092,13 @@ func TestKerberosRequestsMetric(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(k)
 			}
-			udp := counterValue(t, kerbReqs.WithLabelValues(protoUdp))
-			tcp := counterValue(t, kerbReqs.WithLabelValues(protoTcp))
-
 			k.Handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/KdcProxy", bytes.NewReader(fixture(t, "asreq1"))))
 
-			if got := counterValue(t, kerbReqs.WithLabelValues(protoUdp)) - udp; got != tt.wantUDP {
-				t.Errorf("udp requests increased by %v, want %v", got, tt.wantUDP)
+			if got := counterValue(t, k.metrics.kerbReqs.WithLabelValues(protoUdp)); got != tt.wantUDP {
+				t.Errorf("udp requests = %v, want %v", got, tt.wantUDP)
 			}
-			if got := counterValue(t, kerbReqs.WithLabelValues(protoTcp)) - tcp; got != tt.wantTCP {
-				t.Errorf("tcp requests increased by %v, want %v", got, tt.wantTCP)
+			if got := counterValue(t, k.metrics.kerbReqs.WithLabelValues(protoTcp)); got != tt.wantTCP {
+				t.Errorf("tcp requests = %v, want %v", got, tt.wantTCP)
 			}
 		})
 	}
@@ -1134,10 +1153,6 @@ func TestHTTPResponsesMetric(t *testing.T) {
 				r.ContentLength = tt.contentLength
 			}
 
-			total := responsesTotal(t)
-			code := counterValue(t, httpResp.WithLabelValues(tt.wantCode))
-			dropped := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage))
-
 			func() {
 				defer func() {
 					if got := recover(); got != nil && (!tt.wantDropped || got != http.ErrAbortHandler) {
@@ -1151,23 +1166,23 @@ func TestHTTPResponsesMetric(t *testing.T) {
 			if tt.wantDropped {
 				wantTotal, wantDropped = 0, 1
 			}
-			if got := responsesTotal(t) - total; got != wantTotal {
-				t.Errorf("responses increased by %v in total, want %v", got, wantTotal)
+			if got := responsesTotal(t, k.metrics.httpResp); got != wantTotal {
+				t.Errorf("responses = %v in total, want %v", got, wantTotal)
 			}
 			if !tt.wantDropped {
-				if got := counterValue(t, httpResp.WithLabelValues(tt.wantCode)) - code; got != 1 {
-					t.Errorf("responses with code %q increased by %v, want 1", tt.wantCode, got)
+				if got := counterValue(t, k.metrics.httpResp.WithLabelValues(tt.wantCode)); got != 1 {
+					t.Errorf("responses with code %q = %v, want 1", tt.wantCode, got)
 				}
 			}
-			if got := counterValue(t, httpDropped.WithLabelValues(reasonMalformedKerberosMessage)) - dropped; got != wantDropped {
-				t.Errorf("dropped connections increased by %v, want %v", got, wantDropped)
+			if got := counterValue(t, k.metrics.httpDropped.WithLabelValues(reasonMalformedKerberosMessage)); got != wantDropped {
+				t.Errorf("dropped connections = %v, want %v", got, wantDropped)
 			}
 		})
 	}
 }
 
-// responsesTotal returns the sum of kdc_proxy_http_responses_total across all codes
-func responsesTotal(t *testing.T) float64 {
+// responsesTotal returns the sum of the responses counter across all codes
+func responsesTotal(t *testing.T, httpResp *prometheus.CounterVec) float64 {
 	t.Helper()
 
 	ch := make(chan prometheus.Metric)
