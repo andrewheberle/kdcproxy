@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -25,51 +28,106 @@ func logLines(t *testing.T, b []byte) []map[string]any {
 	return lines
 }
 
-// withMsg returns the log lines with message msg
-func withMsg(lines []map[string]any, msg string) []map[string]any {
-	var found []map[string]any
-	for _, l := range lines {
-		if l["msg"] == msg {
-			found = append(found, l)
-		}
-	}
-
-	return found
-}
+var hexID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func TestNewHandler(t *testing.T) {
+	// reads the request body and replies with "hello"
+	hello := func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte("hello"))
+	}
+
 	tests := []struct {
-		name        string
-		handler     http.HandlerFunc
-		wantPanic   any
-		wantStatus  int
-		wantMsgs    map[string]int
-		wantDropped bool
+		name          string
+		handler       http.HandlerFunc
+		header        map[string]string
+		wantPanic     any
+		wantMsg       string
+		wantLevel     string
+		wantStatus    int // 0 when no status is logged
+		wantRespBytes float64
+		wantReqBytes  float64
+		wantID        string // empty for a generated id
+		wantForwarded string // empty when not logged
+		wantError     string // empty when not logged
 	}{
 		{
-			name: "ok",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			},
+			name:          "ok",
+			handler:       hello,
+			wantMsg:       "request",
+			wantLevel:     "INFO",
+			wantStatus:    http.StatusOK,
+			wantRespBytes: 5,
+			wantReqBytes:  7,
+		},
+		{
+			name:       "nothing_written",
+			handler:    func(w http.ResponseWriter, r *http.Request) {},
+			wantMsg:    "request",
+			wantLevel:  "INFO",
 			wantStatus: http.StatusOK,
-			wantMsgs:   map[string]int{"200: OK": 1, "connection dropped": 0},
+		},
+		{
+			name: "client_error",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+			},
+			wantMsg:       "request",
+			wantLevel:     "WARN",
+			wantStatus:    http.StatusBadRequest,
+			wantRespBytes: float64(len("Invalid request\n")),
+		},
+		{
+			name: "server_error",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			},
+			wantMsg:    "request",
+			wantLevel:  "ERROR",
+			wantStatus: http.StatusServiceUnavailable,
 		},
 		{
 			name: "dropped",
 			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.ReadAll(r.Body)
 				panic(http.ErrAbortHandler)
 			},
-			wantPanic:   http.ErrAbortHandler,
-			wantMsgs:    map[string]int{"200: OK": 0, "connection dropped": 1},
-			wantDropped: true,
+			wantPanic:    http.ErrAbortHandler,
+			wantMsg:      "connection dropped",
+			wantLevel:    "WARN",
+			wantReqBytes: 7,
 		},
 		{
 			name: "other_panic",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				panic("boom")
 			},
+			wantMsg:    "panic recovered",
+			wantLevel:  "ERROR",
 			wantStatus: http.StatusInternalServerError,
-			wantMsgs:   map[string]int{"panic recovered": 1, "500: Internal Server Error": 1, "connection dropped": 0},
+			wantError:  "boom",
+		},
+		{
+			name:          "request_id_from_header",
+			handler:       hello,
+			header:        map[string]string{requestIDHeader: "abc-123"},
+			wantMsg:       "request",
+			wantLevel:     "INFO",
+			wantStatus:    http.StatusOK,
+			wantRespBytes: 5,
+			wantReqBytes:  7,
+			wantID:        "abc-123",
+		},
+		{
+			name:          "forwarded_for",
+			handler:       hello,
+			header:        map[string]string{"X-Forwarded-For": "198.51.100.7, 192.0.2.1"},
+			wantMsg:       "request",
+			wantLevel:     "INFO",
+			wantStatus:    http.StatusOK,
+			wantRespBytes: 5,
+			wantReqBytes:  7,
+			wantForwarded: "198.51.100.7, 192.0.2.1",
 		},
 	}
 	for _, tt := range tests {
@@ -77,8 +135,12 @@ func TestNewHandler(t *testing.T) {
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logs, nil))
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/KdcProxy", nil)
+			r := httptest.NewRequest(http.MethodPost, "/KdcProxy", strings.NewReader("request"))
 			r.RemoteAddr = "192.0.2.1:1234"
+			r.Header.Set("User-Agent", "test-agent")
+			for k, v := range tt.header {
+				r.Header.Set(k, v)
+			}
 
 			func() {
 				defer func() {
@@ -90,35 +152,64 @@ func TestNewHandler(t *testing.T) {
 			}()
 
 			if tt.wantPanic == nil && w.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", w.Code, tt.wantStatus)
+				t.Errorf("response status = %d, want %d", w.Code, tt.wantStatus)
 			}
 
 			lines := logLines(t, logs.Bytes())
-			for msg, want := range tt.wantMsgs {
-				if got := len(withMsg(lines, msg)); got != want {
-					t.Errorf("%q logged %d times, want %d:\n%s", msg, got, want, logs.String())
+			if len(lines) != 1 {
+				t.Fatalf("logged %d lines, want 1:\n%s", len(lines), logs.String())
+			}
+			line := lines[0]
+
+			for key, want := range map[string]any{
+				"msg":           tt.wantMsg,
+				"level":         tt.wantLevel,
+				"method":        http.MethodPost,
+				"path":          "/KdcProxy",
+				"ip":            "192.0.2.1:1234",
+				"user_agent":    "test-agent",
+				"request_bytes": tt.wantReqBytes,
+			} {
+				if line[key] != want {
+					t.Errorf("%s = %v, want %v", key, line[key], want)
+				}
+			}
+			if _, ok := line["duration"]; !ok {
+				t.Errorf("duration not logged")
+			}
+
+			if tt.wantStatus == 0 {
+				for _, key := range []string{"status", "response_bytes"} {
+					if _, ok := line[key]; ok {
+						t.Errorf("%s = %v, want it not logged", key, line[key])
+					}
+				}
+			} else {
+				if line["status"] != float64(tt.wantStatus) {
+					t.Errorf("status = %v, want %d", line["status"], tt.wantStatus)
+				}
+				if line["response_bytes"] != tt.wantRespBytes {
+					t.Errorf("response_bytes = %v, want %v", line["response_bytes"], tt.wantRespBytes)
 				}
 			}
 
-			if !tt.wantDropped {
-				return
+			id, _ := line["id"].(string)
+			if tt.wantID != "" && id != tt.wantID {
+				t.Errorf("id = %q, want %q", id, tt.wantID)
 			}
-			dropped := withMsg(lines, "connection dropped")
-			if len(dropped) != 1 {
-				return
+			if tt.wantID == "" && !hexID.MatchString(id) {
+				t.Errorf("id = %q, want a generated 32 character hex id", id)
 			}
-			line := dropped[0]
-			if line["level"] != "WARN" {
-				t.Errorf("level = %v, want WARN", line["level"])
+
+			if got, _ := line["forwarded_for"].(string); got != tt.wantForwarded {
+				t.Errorf("forwarded_for = %q, want %q", got, tt.wantForwarded)
 			}
-			if id, _ := line["id"].(string); id == "" {
-				t.Errorf("id = %v, want the request id", line["id"])
+
+			if got, _ := line["error"].(string); got != tt.wantError {
+				t.Errorf("error = %q, want %q", got, tt.wantError)
 			}
-			request, _ := line["request"].(map[string]any)
-			for key, want := range map[string]string{"method": http.MethodPost, "path": "/KdcProxy", "ip": "192.0.2.1:1234"} {
-				if request[key] != want {
-					t.Errorf("request.%s = %v, want %q", key, request[key], want)
-				}
+			if stack, _ := line["stack"].(string); (tt.wantError != "") != (stack != "") {
+				t.Errorf("stack logged = %v, want %v", stack != "", tt.wantError != "")
 			}
 		})
 	}

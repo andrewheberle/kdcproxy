@@ -71,7 +71,31 @@ Clients must send the `target-domain` field in every proxy message, as the speci
 
 Password change requests (kpasswd, for example when a password has expired) are relayed to the realm's kpasswd servers. These are found through the `_kpasswd._udp`/`_kpasswd._tcp` DNS SRV records that Active Directory publishes, or through `kpasswd_server`/`admin_server` in krb5.conf.
 
-If a proxy message, or the Kerberos message inside it, is malformed, the connection is dropped without a response, as the specification says. A reverse proxy in front of the service will usually report these requests as HTTP 502. Each one is logged at WARN as `connection dropped`, with the request method, path, client address and request id.
+If a proxy message, or the Kerberos message inside it, is malformed, the connection is dropped without a response, as the specification says. A reverse proxy in front of the service will usually report these requests as HTTP 502. Each one is logged at WARN as `connection dropped` (see [Logging](#logging)).
+
+# Logging
+
+Each request is logged once, to stderr:
+
+| Message | Level | When |
+|-|-|-|
+| `request` | INFO for 2xx/3xx, WARN for 4xx, ERROR for 5xx | A response was sent |
+| `connection dropped` | WARN | The connection was dropped without a response |
+| `panic recovered` | ERROR | The request caused an unexpected error, answered with HTTP 500. The line also has `error` and `stack` |
+
+Every line has these attributes:
+
+| Attribute | Value |
+|-|-|
+| `id` | The `X-Request-Id` header if the client or a reverse proxy sent one, otherwise a random 32 character hex id |
+| `method`, `path` | The HTTP method and path |
+| `status` | The HTTP status sent. Not logged for a dropped connection |
+| `response_bytes` | The size of the response body. Not logged for a dropped connection |
+| `request_bytes` | The size of the request body read |
+| `duration` | How long the request took |
+| `ip` | The client address, which is the reverse proxy's address when there is one |
+| `forwarded_for` | The `X-Forwarded-For` header exactly as sent, when present. It is only logged, never trusted |
+| `user_agent` | The `User-Agent` header |
 
 # Metrics
 
