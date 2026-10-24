@@ -109,6 +109,9 @@ func (l *krb5Locator) realm(realm string) string {
 type request struct {
 	*KdcProxyMsg
 
+	// body is the Kerberos message without its length prefix
+	body []byte
+
 	// kpasswd is set for a password change request, which goes to a kpasswd server rather than a KDC
 	kpasswd bool
 }
@@ -310,60 +313,38 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 		valid = validKpasswdReply
 	}
 
+	udp := udpTransport{dialer: k.dialer, metrics: k.metrics}
+	tcp := tcpTransport{dialer: k.dialer, metrics: k.metrics}
+
 	// use both udp and tcp
-	protocols := []string{protoUdp, protoTcp}
+	transports := []transport{udp, tcp}
 	// if message is too large only use TCP
-	if len(msg.KerbMessage)-4 > k.krb5Config.LibDefaults.UDPPreferenceLimit {
-		protocols = []string{protoTcp}
+	if len(msg.body) > k.krb5Config.LibDefaults.UDPPreferenceLimit {
+		transports = []transport{tcp}
 	}
 
-	// try protocol options
-	for _, proto := range protocols {
+	// try transport options
+	for _, t := range transports {
 		// get kdcs
-		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, proto == protoTcp, msg.kpasswd)
+		kdcs, err := k.locator.locate(ctx, msg.TargetDomain, t.network() == protoTcp, msg.kpasswd)
 		if err != nil || len(kdcs) < 1 {
 			continue
 		}
 
 		// try each kdc
 		for _, kdc := range kdcs {
-			// metrics
-			k.metrics.kerbReqs.WithLabelValues(proto).Inc()
-
-			// connect to kdc
-			conn, err := k.dialer.DialContext(ctx, proto, kdc)
-			if err != nil {
-				continue
-			}
-			_ = conn.SetDeadline(time.Now().Add(timeout))
-
-			req := msg.KerbMessage
-			// for udp trim off length
-			if proto == protoUdp {
-				req = msg.KerbMessage[4:]
-			}
-
-			// send message
-			n, err := conn.Write(req)
-			if err != nil {
-				_ = conn.Close()
-				continue
-			}
-
-			// check that all the data was sent
-			if n != len(req) {
-				_ = conn.Close()
-				continue
-			}
-
-			// get Kerberos response
-			resp, err := k.getresponse(conn, valid)
+			resp, err := t.exchange(ctx, kdc, msg.body)
 			if errors.Is(err, errResponseTooBig) {
 				// skip the remaining udp kdcs and use tcp (RFC 4120 7.2.1)
 				break
 			}
 			if err != nil {
 				// for an error try next kdc
+				continue
+			}
+
+			// validate response, trying the next kdc if it is not valid
+			if !valid(resp) {
 				continue
 			}
 
@@ -399,11 +380,12 @@ func (k *KerberosProxy) decode(data []byte) (*request, error) {
 
 	// the target-domain from the client is used for routing, so this only
 	// validates the Kerberos message
-	if validRequest(m.KerbMessage[4:]) {
-		return &request{KdcProxyMsg: &m}, nil
+	body := m.KerbMessage[4:]
+	if validRequest(body) {
+		return &request{KdcProxyMsg: &m, body: body}, nil
 	}
-	if validKpasswdRequest(m.KerbMessage[4:]) {
-		return &request{KdcProxyMsg: &m, kpasswd: true}, nil
+	if validKpasswdRequest(body) {
+		return &request{KdcProxyMsg: &m, body: body, kpasswd: true}, nil
 	}
 
 	return nil, fmt.Errorf("message was not valid")
@@ -494,74 +476,9 @@ func kpasswdHeader(msg []byte, versions ...uint16) (int, bool) {
 	return length, true
 }
 
-func (k *KerberosProxy) getresponse(conn net.Conn, valid func([]byte) bool) ([]byte, error) {
-	// close connection once done
-	defer func() { _ = conn.Close() }()
-
-	// handle udp and tcp responses differently
-	if conn.LocalAddr().Network() == protoUdp {
-		// for udp the response is a single datagram, so there is no EOF to wait for
-		buf := make([]byte, maxUDPReply)
-		n, err := conn.Read(buf)
-		if err != nil {
-			return nil, err
-		}
-		msg := buf[:n]
-
-		// metrics
-		k.metrics.kerbResp.WithLabelValues("udp").Inc()
-
-		if responseTooBig(msg) {
-			return nil, errResponseTooBig
-		}
-
-		// validate response
-		if !valid(msg) {
-			return nil, fmt.Errorf("reply message was not valid")
-		}
-
-		// return message with length added
-		return append(MarshalKerbLength(len(msg)), msg...), nil
-	}
-
-	// read initial 4 bytes to get length of response
-	buf := make([]byte, 4)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, err
-	}
-
-	// work out length of message
-	length, err := UnmarshalKerbLength(buf[:])
-	if err != nil {
-		return nil, err
-	}
-
-	// limit the length, which also rejects the reserved high bit (RFC 4120 7.2.2)
-	if length < 0 || length > maxLength {
-		return nil, fmt.Errorf("reply length %d exceeds maximum %d", length, maxLength)
-	}
-
-	// read rest of message
-	msg := make([]byte, length)
-	if _, err := io.ReadFull(conn, msg); err != nil {
-		return nil, err
-	}
-
-	// metrics
-	k.metrics.kerbResp.WithLabelValues("tcp").Inc()
-
-	// validate response
-	if !valid(msg) {
-		return nil, fmt.Errorf("reply message was not valid")
-	}
-
-	// return response (including length)
-	return append(buf, msg...), nil
-}
-
-// Encodes the provided bytes as a KDC-PROXY-MESSAGE
+// Encodes the provided Kerberos message, without its length prefix, as a KDC-PROXY-MESSAGE
 func (k *KerberosProxy) encode(data []byte) (r []byte, err error) {
-	msg := KdcProxyMsg{KerbMessage: data}
+	msg := KdcProxyMsg{KerbMessage: append(MarshalKerbLength(len(data)), data...)}
 	enc, err := asn1.Marshal(msg)
 	if err != nil {
 		return nil, err
