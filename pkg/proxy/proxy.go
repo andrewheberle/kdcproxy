@@ -17,6 +17,7 @@ import (
 	krb5config "github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
 	"github.com/jcmturner/gokrb5/v8/messages"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 )
 
@@ -120,11 +121,17 @@ type KerberosProxy struct {
 	limiter    *rate.Limiter
 	locator    kdcLocator
 	dialer     dialer
+	metrics    *metrics
 }
 
 // InitKdcProxy creates a KerberosProxy using the defaults of looking up KDC's via DNS
 // with the ability to override these defaults by providing ...[ProxyOption]
 func InitKdcProxy(opts ...ProxyOption) (*KerberosProxy, error) {
+	return newKdcProxy(prometheus.DefaultRegisterer, opts...)
+}
+
+// newKdcProxy is InitKdcProxy with the metrics registered with reg
+func newKdcProxy(reg prometheus.Registerer, opts ...ProxyOption) (*KerberosProxy, error) {
 	// set defaults
 	cfg := krb5config.New()
 	cfg.LibDefaults.DNSLookupKDC = true
@@ -151,6 +158,7 @@ func InitKdcProxy(opts ...ProxyOption) (*KerberosProxy, error) {
 
 	kp.locator = &krb5Locator{config: kp.krb5Config}
 	kp.dialer = &net.Dialer{}
+	kp.metrics = newMetrics(reg)
 
 	return kp, nil
 }
@@ -173,89 +181,119 @@ func InitKdcProxyWithConfigAndLimit(config string, limit int) (*KerberosProxy, e
 // Handler implements a KDC Proxy endpoint over HTTP
 func (k *KerberosProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// metrics
-	httpReqs.Inc()
+	k.metrics.httpReqs.Inc()
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
-		httpRespTimeHistogram.Observe(duration.Seconds())
+		k.metrics.httpRespTimeHistogram.Observe(duration.Seconds())
 	}()
 
-	// ensure content type is always "application/kerberos"
-	w.Header().Set("Content-Type", "application/kerberos")
+	k.respond(w, k.serve(r))
+}
 
+// outcome is how a request is answered: with a reply, an error status, or by
+// dropping the connection
+type outcome struct {
+	status int
+	// message is the error message for a status other than http.StatusOK
+	message string
+	// reply is the proxy message sent for http.StatusOK
+	reply []byte
+	// drop is the reason the connection is dropped without a response, if set
+	drop string
+}
+
+// success answers with reply
+func success(reply []byte) outcome {
+	return outcome{status: http.StatusOK, reply: reply}
+}
+
+// failure answers with an error status and message
+func failure(status int, message string) outcome {
+	return outcome{status: status, message: message}
+}
+
+// dropped drops the connection without a response for reason
+func dropped(reason string) outcome {
+	return outcome{drop: reason}
+}
+
+// serve decides the outcome for r, without writing anything
+func (k *KerberosProxy) serve(r *http.Request) outcome {
 	// we only handle POST's
 	if r.Method != http.MethodPost {
-		httpResp.WithLabelValues(http.StatusText(http.StatusMethodNotAllowed)).Inc()
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+		return failure(http.StatusMethodNotAllowed, "Method not allowed")
 	}
 
 	// check content length is valid
 	length := r.ContentLength
 	if length == -1 {
-		httpResp.WithLabelValues(http.StatusText(http.StatusLengthRequired)).Inc()
-		http.Error(w, "Content length required", http.StatusLengthRequired)
-		return
+		return failure(http.StatusLengthRequired, "Content length required")
 	}
 
 	if length > maxLength {
-		httpResp.WithLabelValues(http.StatusText(http.StatusRequestEntityTooLarge)).Inc()
-		http.Error(w, "Request entity too large", http.StatusRequestEntityTooLarge)
-		return
+		return failure(http.StatusRequestEntityTooLarge, "Request entity too large")
 	}
 
 	// read data from request body
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		httpResp.WithLabelValues(http.StatusText(http.StatusInternalServerError)).Inc()
-		http.Error(w, "Error reading from stream", http.StatusInternalServerError)
-		return
+		return failure(http.StatusInternalServerError, "Error reading from stream")
 	}
 	defer func() { _ = r.Body.Close() }()
 
 	// check rate limit to avoid DDoS of KDC
 	if !k.limiter.Allow() {
-		httpResp.WithLabelValues(http.StatusText(http.StatusTooManyRequests)).Inc()
-		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-		return
+		return failure(http.StatusTooManyRequests, "Rate limit exceeded")
 	}
 
 	// decode the message
 	msg, err := k.decode(data)
 	if err != nil {
 		// drop the connection without a response (MS-KKDCP 3.2.5.1-1)
-		httpDropped.WithLabelValues(reasonMalformedKerberosMessage).Inc()
-		panic(http.ErrAbortHandler)
+		return dropped(reasonMalformedKerberosMessage)
 	}
 
 	// fail if no target-domain is specified (MS-KKDCP 3.2.5.1-2)
 	if msg.TargetDomain == "" {
-		httpResp.WithLabelValues(http.StatusText(http.StatusBadRequest)).Inc()
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
+		return failure(http.StatusBadRequest, "Invalid request")
 	}
 
 	// forward to kdc(s)
 	resp, err := k.forward(r.Context(), msg)
 	if err != nil {
-		httpResp.WithLabelValues(http.StatusText(http.StatusServiceUnavailable)).Inc()
-		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-		return
+		return failure(http.StatusServiceUnavailable, "Service unavailable")
 	}
 
 	// encode response
 	reply, err := k.encode(resp)
 	if err != nil {
-		httpResp.WithLabelValues(http.StatusText(http.StatusInternalServerError)).Inc()
-		http.Error(w, "encoding error", http.StatusInternalServerError)
+		return failure(http.StatusInternalServerError, "encoding error")
+	}
+
+	return success(reply)
+}
+
+// respond writes o to w and counts it. This is the only place a response is
+// written, so every response is counted exactly once.
+func (k *KerberosProxy) respond(w http.ResponseWriter, o outcome) {
+	// ensure content type is always "application/kerberos"
+	w.Header().Set("Content-Type", "application/kerberos")
+
+	if o.drop != "" {
+		k.metrics.httpDropped.WithLabelValues(o.drop).Inc()
+		panic(http.ErrAbortHandler)
+	}
+
+	k.metrics.httpResp.WithLabelValues(http.StatusText(o.status)).Inc()
+
+	if o.status != http.StatusOK {
+		http.Error(w, o.message, o.status)
 		return
 	}
 
-	// metrics
-	httpResp.WithLabelValues(http.StatusText(http.StatusOK)).Inc()
-
 	// send back to client
-	func() { _, _ = w.Write(reply) }()
+	_, _ = w.Write(o.reply)
 }
 
 func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, error) {
@@ -263,7 +301,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
-		kerbRespTimeHistogram.Observe(duration.Seconds())
+		k.metrics.kerbRespTimeHistogram.Observe(duration.Seconds())
 	}()
 
 	// password change replies are framed differently to KDC replies
@@ -290,7 +328,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 		// try each kdc
 		for _, kdc := range kdcs {
 			// metrics
-			kerbReqs.WithLabelValues(proto).Inc()
+			k.metrics.kerbReqs.WithLabelValues(proto).Inc()
 
 			// connect to kdc
 			conn, err := k.dialer.DialContext(ctx, proto, kdc)
@@ -319,7 +357,7 @@ func (k *KerberosProxy) forward(ctx context.Context, msg *request) ([]byte, erro
 			}
 
 			// get Kerberos response
-			resp, err := getresponse(conn, valid)
+			resp, err := k.getresponse(conn, valid)
 			if errors.Is(err, errResponseTooBig) {
 				// skip the remaining udp kdcs and use tcp (RFC 4120 7.2.1)
 				break
@@ -456,7 +494,7 @@ func kpasswdHeader(msg []byte, versions ...uint16) (int, bool) {
 	return length, true
 }
 
-func getresponse(conn net.Conn, valid func([]byte) bool) ([]byte, error) {
+func (k *KerberosProxy) getresponse(conn net.Conn, valid func([]byte) bool) ([]byte, error) {
 	// close connection once done
 	defer func() { _ = conn.Close() }()
 
@@ -471,7 +509,7 @@ func getresponse(conn net.Conn, valid func([]byte) bool) ([]byte, error) {
 		msg := buf[:n]
 
 		// metrics
-		kerbResp.WithLabelValues("udp").Inc()
+		k.metrics.kerbResp.WithLabelValues("udp").Inc()
 
 		if responseTooBig(msg) {
 			return nil, errResponseTooBig
@@ -510,7 +548,7 @@ func getresponse(conn net.Conn, valid func([]byte) bool) ([]byte, error) {
 	}
 
 	// metrics
-	kerbResp.WithLabelValues("tcp").Inc()
+	k.metrics.kerbResp.WithLabelValues("tcp").Inc()
 
 	// validate response
 	if !valid(msg) {
