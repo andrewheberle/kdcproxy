@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/andrewheberle/kdcproxy/compare/v1.7.1...v1.7.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** update cgr.dev/chainguard/static:latest docker digest to fc42af3 ([#134](https://github.com/andrewheberle/kdcproxy/issues/134)) ([90456f9](https://github.com/andrewheberle/kdcproxy/commit/90456f98b40449c30f41e661a3759767b8c9c0df))
+
 ## [1.7.1](https://github.com/andrewheberle/kdcproxy/compare/v1.7.0...v1.7.1) (2026-10-26)
 
 
