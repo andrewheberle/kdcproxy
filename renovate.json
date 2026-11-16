@@ -1,18 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    ":semanticCommits"
-    ],
+  "extends": ["github>andrewheberle/renovate-config#v1.0.0"]
   "packageRules": [
-    {
-      "description": "Base image updates ship as patch releases; see docs/adr/0001",
-      "matchManagers": ["dockerfile"],
-      "matchDepTypes": ["final"],
-      "semanticCommitType": "fix",
-      "schedule": ["before 6am on monday"],
-      "automerge": true
-    },
     {
       "description": "Integration test images are not shipped, so their updates must not trigger a release",
       "matchFileNames": ["test/integration/**"],
