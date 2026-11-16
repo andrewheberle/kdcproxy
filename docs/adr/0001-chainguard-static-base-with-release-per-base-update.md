@@ -11,4 +11,4 @@ The container image is built on `cgr.dev/chainguard/static`, pinned by digest. R
 
 ## Consequences
 
-Releases with no code changes are expected: their only changelog entry is the base image bump. Renovate uses `chore(deps)` for Dockerfile updates by default, which would never trigger a release, so the `fix` override in `renovate.json` is load-bearing.
+Releases with no code changes are expected: their only changelog entry is the base image bump. Renovate uses `chore(deps)` for Dockerfile updates by default, which would never trigger a release, so the `fix` override is load-bearing. It now lives in the shared preset `github>andrewheberle/renovate-config`, which this repository extends at a pinned tag; the Renovate side of this decision is recorded there in [ADR 0001](https://github.com/andrewheberle/renovate-config/blob/main/docs/adr/0001-shipping-updates-are-fix-commits.md).
