@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>andrewheberle/renovate-config#v1.0.0"]
+  "extends": ["github>andrewheberle/renovate-config#v1.0.1"],
   "packageRules": [
     {
       "description": "Integration test images are not shipped, so their updates must not trigger a release",
