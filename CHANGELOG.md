@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.3](https://github.com/andrewheberle/kdcproxy/compare/v1.7.2...v1.7.3) (2026-11-23)
+
+
+### Bug Fixes
+
+* **deps:** update cgr.dev/chainguard/static:latest docker digest to 8658e9e ([#149](https://github.com/andrewheberle/kdcproxy/issues/149)) ([7acb870](https://github.com/andrewheberle/kdcproxy/commit/7acb870d37d24e9544baff959181c500da78da76))
+* **deps:** update module github.com/andrewheberle/configger to v0.2.3 ([#140](https://github.com/andrewheberle/kdcproxy/issues/140)) ([5b590d5](https://github.com/andrewheberle/kdcproxy/commit/5b590d50b221c92ea82255a191643d9020d59c0b))
+
 ## [1.7.2](https://github.com/andrewheberle/kdcproxy/compare/v1.7.1...v1.7.2) (2026-11-02)
 
 
